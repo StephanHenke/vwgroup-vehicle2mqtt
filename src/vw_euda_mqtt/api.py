@@ -299,6 +299,7 @@ class EudaApiClient:
         )
 
     async def async_login(self) -> None:
+        self._logged_in = False
         try:
             await self._do_login()
         except aiohttp.ClientError as err:
@@ -356,7 +357,7 @@ class EudaApiClient:
             safe_landing = _safe_url_for_log(landing)
             LOG.debug("Identity login landed at %s", safe_landing)
             landing_html = await resp.text()
-            if resp.status >= 400:
+            if resp.status >= 400 and not await self._accept_missing_login_landing(resp):
                 err = _login_error(landing_html)
                 raise AuthError(err or f"Login rejected with HTTP {resp.status}")
 
@@ -378,7 +379,7 @@ class EudaApiClient:
                 safe_landing = _safe_url_for_log(landing)
                 LOG.debug("Terms confirmation landed at %s", safe_landing)
                 landing_html = await resp.text()
-                if resp.status >= 400:
+                if resp.status >= 400 and not await self._accept_missing_login_landing(resp):
                     err = _login_error(landing_html)
                     raise AuthError(
                         err
@@ -407,7 +408,7 @@ class EudaApiClient:
                 safe_landing = _safe_url_for_log(landing)
                 LOG.debug("Consent confirmation landed at %s", safe_landing)
                 landing_html = await resp.text()
-                if resp.status >= 400:
+                if resp.status >= 400 and not await self._accept_missing_login_landing(resp):
                     err = _login_error(landing_html)
                     raise AuthError(
                         err
@@ -431,7 +432,7 @@ class EudaApiClient:
                 safe_landing = _safe_url_for_log(landing)
                 LOG.debug("Marketing consent skip landed at %s", safe_landing)
                 landing_html = await resp.text()
-                if resp.status >= 400:
+                if resp.status >= 400 and not await self._accept_missing_login_landing(resp):
                     err = _login_error(landing_html)
                     raise AuthError(
                         err
@@ -448,6 +449,51 @@ class EudaApiClient:
             raise AuthError("Login failed. Check email/password or complete browser login first.")
         if urlparse(landing).netloc != portal_host:
             raise AuthError(f"Login did not complete, ended at {safe_landing}")
+
+    async def _accept_missing_login_landing(self, response: aiohttp.ClientResponse) -> bool:
+        landing = urlparse(str(response.url))
+        portal = urlparse(BASE_URL)
+        if (
+            response.status != 404
+            or (landing.scheme, landing.netloc) != (portal.scheme, portal.netloc)
+            or not re.fullmatch(r"/(?:content/euda/)?[a-z]{2}/[a-z]{2}/user\.html", landing.path)
+        ):
+            return False
+        callback_seen = any(
+            item.status in (301, 302, 303, 307, 308)
+            and (urlparse(str(item.url)).scheme, urlparse(str(item.url)).netloc)
+            == (portal.scheme, portal.netloc)
+            and urlparse(str(item.url)).path == "/services/callbacklogin"
+            for item in response.history
+        )
+        if not callback_seen:
+            return False
+
+        # The localized page can be missing even with a valid session. Probe the
+        # authenticated API directly, without redirects or recursive login retries.
+        async with await self._get(
+            f"{BASE_URL}{VEHICLES_PATH}?viewPosition=FRONT_LEFT",
+            allow_redirects=False,
+        ) as probe:
+            if probe.status != 200:
+                raise AuthError(
+                    "Portal landing page returned HTTP 404 after callback, but the "
+                    f"authenticated session check returned HTTP {probe.status}. "
+                    "Complete browser login and any required consent, then retry."
+                )
+            try:
+                payload = await probe.json()
+            except (ValueError, aiohttp.ContentTypeError) as err:
+                raise AuthError("Portal session check did not return vehicle API JSON") from err
+            if not isinstance(payload, (dict, list)) or (
+                isinstance(payload, dict) and any(key in payload for key in ("error", "errorCode", "statusCode"))
+            ):
+                raise AuthError("Portal session check returned an unexpected vehicle API response")
+        LOG.warning(
+            "Portal landing page %s returned HTTP 404 after callback; authenticated API session verified",
+            _safe_url_for_log(str(response.url)),
+        )
+        return True
 
     def _build_authorize_url(self) -> str:
         params = {

@@ -5,6 +5,19 @@ All notable changes to this project are documented in this file.
 The format follows the spirit of Keep a Changelog, and this project uses
 semantic versioning.
 
+## [Unreleased]
+
+### Fixed
+
+- Handle a missing localized user landing page after the portal login callback
+  (issue #4). Accept HTTP 404 only when the same-origin callback was followed
+  and a separate authenticated vehicle API request confirms the session.
+  Apply the same check after terms and consent steps; preserve other errors.
+
+### Changed
+
+- Raise the minimum aiohttp version from 3.14.0 to 3.14.3 (Dependabot #3).
+
 ## [0.3.0] - 2026-06-05
 
 ### Added

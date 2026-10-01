@@ -429,6 +429,18 @@ Fehler erneut auftaucht, mit `--debug` testen und die Ziel-URL prüfen.
 Volkswagen hat eine Bestätigungsmail geschickt. Den Link in der Mail anklicken
 und danach den Dienst neu starten.
 
+`Authentication failed: Login rejected with HTTP 404`
+
+[Issue #4](https://github.com/StephanHenke/vwgroup-vehicle2mqtt/issues/4)
+beschreibt eine fehlende lokalisierte Startseite (`/se/en/user.html`) nach dem
+Portal-Login-Callback. Diese Redirect-Kette deutet nicht auf fehlenden User
+Consent hin. Der Dienst akzeptiert diesen speziellen 404 nur nach einem
+Portal-Callback und erfolgreicher Sitzungsprüfung an der Fahrzeug-API.
+Andere HTTP-Fehler bleiben Fehler. Scheitert die Sitzungsprüfung, den
+Browser-Login mit demselben Markenkonto abschließen, gegebenenfalls nötige
+Einwilligungen oder E-Mail-Bestätigung prüfen und `--diagnose` erneut starten.
+Keine Cookies, Autorisierungscodes, Tokens oder unredigierten Redirect-URLs teilen.
+
 `No continuous-data Identifier returned`
 
 Im EU Data Act Portal ist für die VIN noch keine Continuous-/Customised-

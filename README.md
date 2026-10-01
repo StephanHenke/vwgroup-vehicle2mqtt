@@ -406,6 +406,17 @@ automatically. If it appears again, run with `--debug` and check the landing URL
 Volkswagen sent a verification email. Open the link in that email, then restart
 the service.
 
+`Authentication failed: Login rejected with HTTP 404`
+
+[Issue #4](https://github.com/StephanHenke/vwgroup-vehicle2mqtt/issues/4)
+reports a missing localized landing page (`/se/en/user.html`) after the portal
+login callback. This redirect trace does not indicate missing user consent.
+The service accepts this specific 404 only after a portal callback and a
+successful authenticated vehicle API check. Other HTTP failures remain errors.
+If the session check fails, complete browser login with the same brand account,
+review any required consent or email verification, and run `--diagnose` again.
+Do not share cookies, authorization codes, tokens, or unredacted redirect URLs.
+
 `No continuous-data Identifier returned`
 
 The VIN does not have an active continuous/customised data request in the EU
