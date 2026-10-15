@@ -14,10 +14,13 @@ import uuid
 import zipfile
 from dataclasses import dataclass
 from html.parser import HTMLParser
-from urllib.parse import parse_qs, urlencode, urljoin, urlparse
+from urllib.parse import parse_qs, parse_qsl, urlencode, urljoin, urlparse
 from xml.etree import ElementTree
 
 import aiohttp
+from yarl import URL
+
+from . import __version__
 
 LOG = logging.getLogger(__name__)
 
@@ -35,10 +38,7 @@ LIST_PATH = "/proxy_api/euda-apim/datadelivery/vehicles/{vin}/{identifier}/list"
 DOWNLOAD_PATH = "/proxy_api/euda-apim/datadelivery/vehicles/{vin}/{identifier}/download"
 
 NO_CONTENT_SUFFIX = "_no_content_found.zip"
-USER_AGENT = (
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
-)
+USER_AGENT = f"vwgroup-vehicle2mqtt/{__version__}"
 
 
 class ApiError(Exception):
@@ -276,6 +276,14 @@ def _extract_vins(payload) -> list[dict]:
     return list(vins.values())
 
 
+@dataclass(frozen=True)
+class _LoginPage:
+    url: str
+    html: str
+    callback: bool = False
+    status: int = 200
+
+
 class EudaApiClient:
     """Authenticated client for the EU Data Act portal."""
 
@@ -302,183 +310,147 @@ class EudaApiClient:
         self._logged_in = False
         try:
             await self._do_login()
-        except aiohttp.ClientError as err:
-            raise ApiError(f"Network error during login: {err}") from err
+        except (aiohttp.ClientError, TimeoutError) as err:
+            raise ApiError("Network error during login; retry later") from err
         self._logged_in = True
 
-    async def _do_login(self) -> None:
-        try:
-            async with await self._get(f"{BASE_URL}/") as resp:
-                await resp.read()
-        except aiohttp.ClientError as err:
-            LOG.debug("Portal priming failed, continuing: %s", err)
-
-        authorize_url = await self._get_authorize_url()
-        LOG.debug("OIDC authorize URL: %s", authorize_url)
-        async with await self._get(authorize_url) as resp:
-            signin_url = str(resp.url)
-            signin_html = await resp.text()
-
-        fields, action = _login_fields(signin_html)
-        if "hmac" not in fields or "_csrf" not in fields:
-            raise AuthError(f"Could not parse sign-in form, found fields: {sorted(fields)}")
-        fields["email"] = self._config.email
-        identifier_action = urljoin(signin_url, action or "")
-        async with self._session.post(
-            identifier_action,
-            data=fields,
-            headers={"User-Agent": USER_AGENT, "Referer": signin_url},
-        ) as resp:
-            authenticate_url = str(resp.url)
-            authenticate_html = await resp.text()
-
-        fields2, action2 = _login_fields(authenticate_html)
-        if "hmac" not in fields2 or "_csrf" not in fields2:
-            err = _login_error(authenticate_html)
-            raise AuthError(
-                err
-                or "Identity portal did not return the password form. "
-                "Check the email address or login flow."
-            )
-        fields2["email"] = self._config.email
-        fields2["password"] = self._config.password
-        authenticate_action = (
-            urljoin(authenticate_url, action2)
-            if action2
-            else authenticate_url.split("?", 1)[0]
+    @staticmethod
+    def _validate_login_url(url: str, *, identity_only: bool = False) -> None:
+        parsed = urlparse(url)
+        allowed = (urlparse(IDENTITY_BASE).netloc,) if identity_only else (
+            urlparse(IDENTITY_BASE).netloc, urlparse(BASE_URL).netloc,
         )
+        if parsed.scheme != "https" or parsed.netloc not in allowed:
+            raise AuthError("Login target is not an allowed HTTPS origin")
+        if parsed.path.endswith("/user.html"):
+            raise AuthError("Login reached a portal page without completing the callback")
 
-        async with self._session.post(
-            authenticate_action,
-            data=fields2,
-            headers={"User-Agent": USER_AGENT, "Referer": authenticate_url},
-        ) as resp:
-            landing = str(resp.url)
-            safe_landing = _safe_url_for_log(landing)
-            LOG.debug("Identity login landed at %s", safe_landing)
-            landing_html = await resp.text()
-            if resp.status >= 400 and not await self._accept_missing_login_landing(resp):
-                err = _login_error(landing_html)
-                raise AuthError(err or f"Login rejected with HTTP {resp.status}")
-
-        portal_host = urlparse(BASE_URL).netloc
-        if "terms-and-conditions" in landing:
-            LOG.info("Accepting required VW identity terms at %s", safe_landing)
-            terms_action = _terms_action_url(landing, landing_html)
-            terms_origin = urlparse(terms_action)
-            async with self._session.post(
-                terms_action,
-                data=_terms_payload(landing_html),
-                headers={
-                    "User-Agent": USER_AGENT,
-                    "Referer": landing,
-                    "Origin": f"{terms_origin.scheme}://{terms_origin.netloc}",
-                },
-            ) as resp:
-                landing = str(resp.url)
-                safe_landing = _safe_url_for_log(landing)
-                LOG.debug("Terms confirmation landed at %s", safe_landing)
-                landing_html = await resp.text()
-                if resp.status >= 400 and not await self._accept_missing_login_landing(resp):
-                    err = _login_error(landing_html)
-                    raise AuthError(
-                        err
-                        or "Could not confirm VW identity terms automatically. "
-                        f"Login landed at {safe_landing}"
-                    )
-        if "/consent/users/" in landing:
-            LOG.info("Granting required VW identity client consent at %s", safe_landing)
-            consent_payload = _form_payload(landing_html)
-            if not consent_payload:
-                raise AuthError(
-                    "VW identity client requires consent, but the consent form could not be parsed. "
-                    f"Login landed at {safe_landing}"
+    async def _login_request(
+        self, method: str, url: str, *, data=None, referer=None, check_status: bool = True,
+    ) -> _LoginPage:
+        # All login hops are explicit: never fetch the CMS page after the callback
+        # and never forward a POST body to another origin.
+        for hop in range(11):
+            self._validate_login_url(url, identity_only=method == "POST")
+            headers = {"User-Agent": USER_AGENT}
+            if referer:
+                headers["Referer"] = referer
+            if method == "POST":
+                headers["Origin"] = IDENTITY_BASE
+                request = self._session.post(url, data=data, headers=headers, allow_redirects=False)
+            else:
+                request = await self._get(url, headers=headers, allow_redirects=False)
+            async with request as resp:
+                parsed = urlparse(str(resp.url))
+                callback = (
+                    (parsed.scheme, parsed.netloc) == ("https", urlparse(BASE_URL).netloc)
+                    and parsed.path == "/services/callbacklogin"
                 )
-            consent_origin = urlparse(landing)
-            async with self._session.post(
-                landing,
-                data=consent_payload,
-                headers={
-                    "User-Agent": USER_AGENT,
-                    "Referer": landing,
-                    "Origin": f"{consent_origin.scheme}://{consent_origin.netloc}",
-                },
-            ) as resp:
-                landing = str(resp.url)
-                safe_landing = _safe_url_for_log(landing)
-                LOG.debug("Consent confirmation landed at %s", safe_landing)
-                landing_html = await resp.text()
-                if resp.status >= 400 and not await self._accept_missing_login_landing(resp):
-                    err = _login_error(landing_html)
-                    raise AuthError(
-                        err
-                        or "Could not grant VW identity client consent automatically. "
-                        f"Login landed at {safe_landing}"
-                    )
-        if "/consent/marketing/" in landing:
-            LOG.info("Skipping optional VW identity marketing consent at %s", safe_landing)
-            marketing_skip = _marketing_skip_url(landing, landing_html)
-            marketing_origin = urlparse(marketing_skip)
-            async with self._session.post(
-                marketing_skip,
-                data=_marketing_payload(landing_html),
-                headers={
-                    "User-Agent": USER_AGENT,
-                    "Referer": landing,
-                    "Origin": f"{marketing_origin.scheme}://{marketing_origin.netloc}",
-                },
-            ) as resp:
-                landing = str(resp.url)
-                safe_landing = _safe_url_for_log(landing)
-                LOG.debug("Marketing consent skip landed at %s", safe_landing)
-                landing_html = await resp.text()
-                if resp.status >= 400 and not await self._accept_missing_login_landing(resp):
-                    err = _login_error(landing_html)
-                    raise AuthError(
-                        err
-                        or "Could not skip optional VW identity marketing consent automatically. "
-                        f"Login landed at {safe_landing}"
-                    )
-        if "verification/email-sent" in landing:
-            raise AuthError(
-                "The VW identity client requires email verification for this account/client. "
-                "Check the account mailbox, open the Volkswagen verification link, then run "
-                f"the service again. Login landed at {safe_landing}"
-            )
-        if "signin-service" in landing or "/error" in landing:
-            raise AuthError("Login failed. Check email/password or complete browser login first.")
-        if urlparse(landing).netloc != portal_host:
-            raise AuthError(f"Login did not complete, ended at {safe_landing}")
+                LOG.debug("Login hop %s: %s %s -> HTTP %s", hop, method, parsed.netloc, resp.status)
+                if callback:
+                    self._check_login_status(resp.status)
+                    if resp.status not in (200, 301, 302, 303, 307, 308):
+                        raise AuthError("Unexpected login callback response")
+                    cookie = resp.cookies.get("access_token")
+                    usable = self._session.cookie_jar.filter_cookies(URL(f"{BASE_URL}{VEHICLES_PATH}"))
+                    if (not cookie or not cookie.value or "access_token" not in usable
+                            or usable["access_token"].value != cookie.value):
+                        raise AuthError("Login callback did not establish a usable access_token session")
+                    return _LoginPage(str(resp.url), "", True)
+                if resp.status in (301, 302, 303, 307, 308):
+                    location = resp.headers.get("Location")
+                    if not location:
+                        raise AuthError("Login redirect has no Location header")
+                    target = urljoin(str(resp.url), location)
+                    if resp.status in (301, 302, 303):
+                        method, data = "GET", None
+                    elif method == "POST" and urlparse(target).netloc != parsed.netloc:
+                        raise AuthError("Login redirect would forward form data to another origin")
+                    self._validate_login_url(target, identity_only=method == "POST")
+                    referer = _safe_url_for_log(str(resp.url))
+                    url = target
+                    continue
+                html = await resp.text()
+                if check_status:
+                    self._check_login_status(resp.status, html)
+                return _LoginPage(str(resp.url), html, status=resp.status)
+        raise AuthError("Login redirect chain exceeded 10 hops")
 
-    async def _accept_missing_login_landing(self, response: aiohttp.ClientResponse) -> bool:
-        landing = urlparse(str(response.url))
-        portal = urlparse(BASE_URL)
-        if (
-            response.status not in (404, 406)
-            or (landing.scheme, landing.netloc) != (portal.scheme, portal.netloc)
-            or not re.fullmatch(r"/(?:content/euda/)?[a-z]{2}/[a-z]{2}/user\.html", landing.path)
-        ):
-            return False
-        callback_seen = any(
-            item.status in (301, 302, 303, 307, 308)
-            and (urlparse(str(item.url)).scheme, urlparse(str(item.url)).netloc)
-            == (portal.scheme, portal.netloc)
-            and urlparse(str(item.url)).path == "/services/callbacklogin"
-            for item in response.history
+    @staticmethod
+    def _check_login_status(status: int, html: str = "") -> None:
+        if status == 429 or status >= 500:
+            raise ApiError(f"Portal temporarily unavailable during login (HTTP {status}); retry later")
+        if status >= 400:
+            raise AuthError(_login_error(html) or f"Login rejected with HTTP {status}")
+
+    async def _do_login(self) -> None:
+        # Brand discovery is retained; the unrelated portal home page is not fetched.
+        page = await self._login_request("GET", await self._get_authorize_url())
+        fields, action = _login_fields(page.html)
+        if "hmac" not in fields or "_csrf" not in fields:
+            raise AuthError("Could not parse the identity sign-in form")
+        fields["email"] = self._config.email
+        page = await self._login_request("POST", urljoin(page.url, action or ""), data=fields, referer=page.url)
+        fields, action = _login_fields(page.html)
+        if "hmac" not in fields or "_csrf" not in fields:
+            raise AuthError(_login_error(page.html) or "Identity portal did not return the password form")
+        fields["email"] = self._config.email
+        fields["password"] = self._config.password
+        page = await self._login_request(
+            "POST", urljoin(page.url, action) if action else page.url.split("?", 1)[0], data=fields, referer=page.url,
         )
-        if not callback_seen:
-            return False
 
-        # The localized page can fail even with a valid session. Probe the
-        # authenticated API directly, without redirects or recursive login retries.
+        handled = set()
+        while not page.callback:
+            path = urlparse(page.url).path
+            if "verification/email-sent" in path:
+                raise AuthError("Email verification required; open the Volkswagen verification email and retry")
+            if "terms-and-conditions" in path:
+                kind = "terms"
+                target, data = _terms_action_url(page.url, page.html), _terms_payload(page.html)
+            elif "/consent/users/" in path:
+                kind = "client consent"
+                target, data = page.url, _form_payload(page.html)
+                if not data:
+                    raise AuthError("Required client consent could not be parsed; complete browser login")
+            elif "/consent/marketing/" in path:
+                kind = "marketing consent"
+                callback = (parse_qs(urlparse(page.url).query).get("callback") or [""])[0]
+                if callback:
+                    self._validate_login_url(callback, identity_only=True)
+                    if urlparse(callback).path not in (
+                        "/oidc/v1/oauth/client/callback", "/oidc/v1/oauth/client/callback/success",
+                    ):
+                        raise AuthError("Invalid marketing consent callback")
+                    target = urlparse(callback)._replace(
+                        query=urlencode(parse_qsl(urlparse(callback).query, keep_blank_values=True)),
+                    ).geturl()
+                    data = None
+                else:
+                    try:
+                        target, data = _marketing_skip_url(page.url, page.html), _marketing_payload(page.html)
+                    except (KeyError, TypeError) as err:
+                        raise AuthError("Marketing consent cannot be skipped; complete browser login") from err
+            else:
+                raise AuthError(_login_error(page.html) or "Login did not reach the portal callback")
+            self._validate_login_url(page.url, identity_only=True)
+            if kind in handled:
+                raise AuthError(f"Login still requires {kind}; complete browser login")
+            handled.add(kind)
+            LOG.debug("Login handling %s", kind)
+            page = await self._login_request("GET" if data is None else "POST", target, data=data, referer=page.url)
+        await self._verify_session()
+
+    async def _verify_session(self) -> None:
+        # A fresh callback cookie alone is not proof of usable API access.
         async with await self._get(
-            f"{BASE_URL}{VEHICLES_PATH}?viewPosition=FRONT_LEFT",
-            allow_redirects=False,
+            f"{BASE_URL}{VEHICLES_PATH}?viewPosition=FRONT_LEFT", allow_redirects=False,
         ) as probe:
+            if probe.status == 429 or probe.status >= 500:
+                raise ApiError(f"Vehicle API temporarily unavailable (HTTP {probe.status}); retry later")
             if probe.status != 200:
                 raise AuthError(
-                    f"Portal landing page returned HTTP {response.status} after callback, but the "
-                    f"authenticated session check returned HTTP {probe.status}. "
+                    f"Authenticated session check returned HTTP {probe.status}. "
                     "Complete browser login and any required consent, then retry."
                 )
             try:
@@ -489,12 +461,7 @@ class EudaApiClient:
                 isinstance(payload, dict) and any(key in payload for key in ("error", "errorCode", "statusCode"))
             ):
                 raise AuthError("Portal session check returned an unexpected vehicle API response")
-        LOG.warning(
-            "Portal landing page %s returned HTTP %s after callback; authenticated API session verified",
-            _safe_url_for_log(str(response.url)),
-            response.status,
-        )
-        return True
+        LOG.debug("Portal callback and authenticated vehicle API session verified")
 
     def _build_authorize_url(self) -> str:
         params = {
@@ -511,21 +478,16 @@ class EudaApiClient:
         brand = self._config.brand.upper()
         redirect_url = f"{BASE_URL}/services/redirect/authentication?{urlencode({'brand': brand, 'method': 'login'})}"
         try:
-            async with await self._get(
-                redirect_url,
-                headers={"Referer": f"{BASE_URL}/{self._config.country}/{self._config.language}/login.html"},
-            ) as resp:
-                parsed = urlparse(str(resp.url))
-                query = parse_qs(parsed.query)
-                redirect = (query.get("redirect") or [""])[0]
-                if redirect:
-                    LOG.debug(
-                        "Using %s brand authorize URL from portal redirect",
-                        brand,
-                    )
-                    return redirect
-        except aiohttp.ClientError as err:
-            LOG.debug("Could not fetch brand authorize URL, using fallback: %s", err)
+            page = await self._login_request(
+                "GET", redirect_url, check_status=False,
+                referer=f"{BASE_URL}/{self._config.country}/{self._config.language}/login.html",
+            )
+            redirect = (parse_qs(urlparse(page.url).query).get("redirect") or [""])[0]
+            if page.status == 200 and redirect:
+                self._validate_login_url(redirect, identity_only=True)
+                return redirect
+        except (aiohttp.ClientError, TimeoutError) as err:
+            LOG.debug("Brand authorize discovery unavailable (%s); using configured fallback", type(err).__name__)
         return self._build_authorize_url()
 
     async def _get_json(
@@ -541,6 +503,8 @@ class EudaApiClient:
                     self._logged_in = False
                     await self.async_login()
                     return await self._get_json(url, headers=headers, _retry=False)
+                if resp.status in (401, 403):
+                    self._logged_in = False
                 if resp.status >= 400:
                     raise ApiError(f"GET {_safe_url_for_log(url)} -> HTTP {resp.status}")
                 text = await resp.text()
@@ -599,6 +563,8 @@ class EudaApiClient:
                     self._logged_in = False
                     await self.async_login()
                     async with await self._get(url, headers=headers) as resp2:
+                        if resp2.status in (401, 403):
+                            self._logged_in = False
                         if resp2.status >= 400:
                             raise ApiError(f"Download {name} -> HTTP {resp2.status}")
                         raw = await resp2.read()

@@ -9,13 +9,17 @@ semantic versioning.
 
 ### Fixed
 
-- Handle localized user landing page failures after the portal login callback
-  (issues #4 and #5). Accept HTTP 404 or 406 only when the same-origin callback
-  was followed and a separate authenticated vehicle API request confirms the session.
-  Apply the same check after terms and consent steps; preserve other errors.
+- Complete login at the exact portal callback with a newly issued, usable session
+  cookie and an authenticated vehicle API check. Do not request the localized
+  CMS landing page that caused HTTP 404/406 failures (issues #4 and #5).
+- Validate login redirect and form targets; bound redirects and consent retries.
+  Keep authentication/consent errors distinct from temporary API outages.
+- Diagnose the latest content dataset through ZIP download and extraction, and
+  clear failed sessions after a rejected download/API retry.
 
 ### Changed
 
+- Use an application User-Agent and remove the portal home-page priming request.
 - Raise the minimum aiohttp version from 3.14.0 to 3.14.3 (Dependabot #3).
 
 ## [0.3.0] - 2026-06-05

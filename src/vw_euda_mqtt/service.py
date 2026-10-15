@@ -965,6 +965,12 @@ async def run_diagnose(config: ServiceConfig, config_path: Path, dry_run: bool =
             listing = await _list_datasets_with_retries(client, selected_vin, selected_identifier)
             content = [entry for entry in listing if entry.get("name") and not entry["name"].endswith(NO_CONTENT_SUFFIX)]
             print(f"Dataset listing: ok ({len(listing)} files, {len(content)} content files)")
+            if content:
+                newest = max(content, key=lambda entry: _created_on(entry) or datetime.min.replace(tzinfo=timezone.utc))
+                download = await client.async_download_dataset(selected_vin, selected_identifier, newest["name"])
+                print(f"Dataset download: ok ({len(download.raw)} bytes, {len(download.files)} extracted files)")
+            else:
+                print("Dataset download: not tested (no content dataset available yet)")
     except Exception as err:
         message = _redact_text(
             str(err),
@@ -986,7 +992,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--once", action="store_true", help="Run one poll and exit")
     parser.add_argument("--dry-run", action="store_true", help="Print MQTT publishes instead of sending")
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
-    parser.add_argument("--diagnose", action="store_true", help="Check portal, vehicle, dataset and MQTT access")
+    parser.add_argument("--diagnose", action="store_true", help="Check portal, vehicle, dataset download and MQTT access")
     parser.add_argument("--healthcheck", action="store_true", help="Check recent successful dataset processing")
     return parser
 

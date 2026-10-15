@@ -393,13 +393,17 @@ in [history.md](history.md).
 
 Run `--diagnose` first when setting up a new account, vehicle, MQTT broker, or
 container. It checks configuration, MQTT connectivity, portal login, vehicle
-selection, continuous-data identifier lookup, and the dataset list while
-redacting configured secrets.
+selection, continuous-data identifier lookup, the dataset list, and download/
+extraction of the newest content ZIP while redacting configured secrets.
+Diagnosis does not publish dataset values or update the polling state. With
+`--diagnose --dry-run`, MQTT is skipped but the real portal download is tested.
+`Dataset download: ok` confirms the ZIP was downloaded and extracted. If no
+content file exists yet, the output explicitly says the download was not tested.
 
 `Authentication failed: terms-and-conditions`
 
 VW Identity still requested terms or registration. The service now handles this
-automatically. If it appears again, run with `--debug` and check the landing URL.
+automatically. If it appears again, run with `--debug` and check the reported login stage.
 
 `verification/email-sent`
 
@@ -414,8 +418,11 @@ login callback. This redirect trace does not indicate missing user consent.
 A similar HTTP 406 was confirmed in issue #4 and reported in
 [issue #5](https://github.com/StephanHenke/vwgroup-vehicle2mqtt/issues/5),
 where the redirect chain has not yet been confirmed.
-The service accepts these specific 404/406 responses only after a portal callback
-and a successful authenticated vehicle API check. Other HTTP failures remain errors.
+The login now stops at the exact portal callback, checks its newly issued session
+cookie, and confirms API access without following redirects. The localized
+`user.html` page is never requested, so its HTTP 404/406 cannot break the login.
+HTTP errors before/at the callback still fail; 429/5xx are reported as temporary
+API failures and retried on the configured service retry interval.
 If the session check fails, complete browser login with the same brand account,
 review any required consent or email verification, and run `--diagnose` again.
 Do not share cookies, authorization codes, tokens, or unredacted redirect URLs.

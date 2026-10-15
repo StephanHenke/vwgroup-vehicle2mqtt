@@ -416,13 +416,19 @@ Zeitstempeln ist in [history.md](history.md) beschrieben.
 
 Bei neuer Einrichtung zuerst `--diagnose` ausführen. Der Modus prüft
 Konfiguration, MQTT-Verbindung, Portal-Login, Fahrzeugauswahl, Continuous-
-Data-Identifier und Dataset-Liste, ohne konfigurierte Zugangsdaten auszugeben.
+Data-Identifier, Dataset-Liste sowie Download und Entpacken der neuesten
+verfügbaren Inhalts-ZIP, ohne konfigurierte Zugangsdaten auszugeben.
+Die Diagnose veröffentlicht keine Dataset-Werte und ändert den Polling-Status nicht.
+Mit `--diagnose --dry-run` wird MQTT übersprungen, der echte Portal-Download aber
+getestet. `Dataset download: ok` bestätigt Download und Entpacken der ZIP.
+Ist noch keine Inhaltsdatei vorhanden, meldet die Ausgabe den Download ausdrücklich
+als nicht getestet.
 
 `Authentication failed: terms-and-conditions`
 
 Der alte Fehler bedeutete, dass VW Identity noch AGB/Registrierung verlangte.
 Der Dienst kann diesen Schritt inzwischen automatisch bestätigen. Falls der
-Fehler erneut auftaucht, mit `--debug` testen und die Ziel-URL prüfen.
+Fehler erneut auftaucht, mit `--debug` testen und den gemeldeten Login-Schritt prüfen.
 
 `verification/email-sent`
 
@@ -437,9 +443,12 @@ Portal-Login-Callback. Diese Redirect-Kette deutet nicht auf fehlenden User
 Consent hin. Ein entsprechender HTTP 406 wurde in Issue #4 bestätigt und in
 [Issue #5](https://github.com/StephanHenke/vwgroup-vehicle2mqtt/issues/5)
 gemeldet; dort ist die Redirect-Kette noch nicht bestätigt.
-Der Dienst akzeptiert diese speziellen 404/406-Antworten nur nach einem
-Portal-Callback und erfolgreicher Sitzungsprüfung an der Fahrzeug-API.
-Andere HTTP-Fehler bleiben Fehler. Scheitert die Sitzungsprüfung, den
+Der Login endet jetzt am exakten Portal-Callback, prüft das neu ausgestellte
+Sitzungscookie und bestätigt den API-Zugriff ohne Weiterleitungen. Die lokalisierte
+`user.html` wird nicht mehr angefordert; deren HTTP 404/406 kann den Login daher
+nicht mehr verhindern. Fehler vor/am Callback führen weiterhin zum Abbruch.
+429/5xx werden als vorübergehende API-Fehler gemeldet; der Dienst versucht es nach
+dem konfigurierten Wiederholungsintervall erneut. Scheitert die Sitzungsprüfung, den
 Browser-Login mit demselben Markenkonto abschließen, gegebenenfalls nötige
 Einwilligungen oder E-Mail-Bestätigung prüfen und `--diagnose` erneut starten.
 Keine Cookies, Autorisierungscodes, Tokens oder unredigierten Redirect-URLs teilen.
