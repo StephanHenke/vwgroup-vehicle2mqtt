@@ -9,9 +9,9 @@ semantic versioning.
 
 ### Fixed
 
-- Handle a missing localized user landing page after the portal login callback
-  (issue #4). Accept HTTP 404 only when the same-origin callback was followed
-  and a separate authenticated vehicle API request confirms the session.
+- Handle localized user landing page failures after the portal login callback
+  (issues #4 and #5). Accept HTTP 404 or 406 only when the same-origin callback
+  was followed and a separate authenticated vehicle API request confirms the session.
   Apply the same check after terms and consent steps; preserve other errors.
 
 ### Changed

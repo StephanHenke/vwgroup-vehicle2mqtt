@@ -406,13 +406,16 @@ automatically. If it appears again, run with `--debug` and check the landing URL
 Volkswagen sent a verification email. Open the link in that email, then restart
 the service.
 
-`Authentication failed: Login rejected with HTTP 404`
+`Authentication failed: Login rejected with HTTP 404` or `HTTP 406`
 
 [Issue #4](https://github.com/StephanHenke/vwgroup-vehicle2mqtt/issues/4)
 reports a missing localized landing page (`/se/en/user.html`) after the portal
 login callback. This redirect trace does not indicate missing user consent.
-The service accepts this specific 404 only after a portal callback and a
-successful authenticated vehicle API check. Other HTTP failures remain errors.
+A similar HTTP 406 was confirmed in issue #4 and reported in
+[issue #5](https://github.com/StephanHenke/vwgroup-vehicle2mqtt/issues/5),
+where the redirect chain has not yet been confirmed.
+The service accepts these specific 404/406 responses only after a portal callback
+and a successful authenticated vehicle API check. Other HTTP failures remain errors.
 If the session check fails, complete browser login with the same brand account,
 review any required consent or email verification, and run `--diagnose` again.
 Do not share cookies, authorization codes, tokens, or unredacted redirect URLs.

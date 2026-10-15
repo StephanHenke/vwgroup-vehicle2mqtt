@@ -454,7 +454,7 @@ class EudaApiClient:
         landing = urlparse(str(response.url))
         portal = urlparse(BASE_URL)
         if (
-            response.status != 404
+            response.status not in (404, 406)
             or (landing.scheme, landing.netloc) != (portal.scheme, portal.netloc)
             or not re.fullmatch(r"/(?:content/euda/)?[a-z]{2}/[a-z]{2}/user\.html", landing.path)
         ):
@@ -469,7 +469,7 @@ class EudaApiClient:
         if not callback_seen:
             return False
 
-        # The localized page can be missing even with a valid session. Probe the
+        # The localized page can fail even with a valid session. Probe the
         # authenticated API directly, without redirects or recursive login retries.
         async with await self._get(
             f"{BASE_URL}{VEHICLES_PATH}?viewPosition=FRONT_LEFT",
@@ -477,7 +477,7 @@ class EudaApiClient:
         ) as probe:
             if probe.status != 200:
                 raise AuthError(
-                    "Portal landing page returned HTTP 404 after callback, but the "
+                    f"Portal landing page returned HTTP {response.status} after callback, but the "
                     f"authenticated session check returned HTTP {probe.status}. "
                     "Complete browser login and any required consent, then retry."
                 )
@@ -490,8 +490,9 @@ class EudaApiClient:
             ):
                 raise AuthError("Portal session check returned an unexpected vehicle API response")
         LOG.warning(
-            "Portal landing page %s returned HTTP 404 after callback; authenticated API session verified",
+            "Portal landing page %s returned HTTP %s after callback; authenticated API session verified",
             _safe_url_for_log(str(response.url)),
+            response.status,
         )
         return True
 
