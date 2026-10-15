@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -39,6 +39,7 @@ from vw_euda_mqtt.service import (  # noqa: E402
     publish_homeassistant_discovery,
     publish_status,
     run_service,
+    run_diagnose,
     save_original_dataset,
 )
 
@@ -879,6 +880,58 @@ def _recording_publisher_class():
             self.retained_events.append((topic, value, retain_value))
 
     return RecordingPublisher
+
+
+class DiagnoseDownloadTests(unittest.IsolatedAsyncioTestCase):
+    async def test_diagnosis_downloads_newest_dataset_without_writing_or_publishing(self):
+        config = ServiceConfig("user@example.com", "password", mqtt=MqttConfig("mqtt.example"))
+        listing = [
+            {"name": "new.zip", "createdOn": "2026-10-15T10:00:00Z"},
+            {"name": "old.zip", "createdOn": "2026-10-14T10:00:00Z"},
+            {"name": "newest_no_content_found.zip", "createdOn": "2026-10-16T10:00:00Z"},
+        ]
+        for failure in (False, True):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as tmp:
+                client = Mock()
+                client.async_login = AsyncMock()
+                client.async_download_dataset = AsyncMock(
+                    return_value=DatasetDownload("new.zip", {}, [], b"zip"),
+                    side_effect=ApiError("download denied") if failure else None,
+                )
+                output, errors = io.StringIO(), io.StringIO()
+                with patch("vw_euda_mqtt.service.EudaApiClient", return_value=client), \
+                     patch("vw_euda_mqtt.service._select_vehicle_and_identifier", new=AsyncMock(return_value=("vin", "id"))), \
+                     patch("vw_euda_mqtt.service._list_datasets_with_retries", new=AsyncMock(return_value=listing)), \
+                     patch("vw_euda_mqtt.service.check_mqtt_connection"), \
+                     patch("vw_euda_mqtt.service.publish_dataset") as publish, \
+                     patch("vw_euda_mqtt.service._save_state") as save, \
+                     patch("sys.stdout", output), patch("sys.stderr", errors):
+                    result = await run_diagnose(config, Path(tmp) / "config.json", dry_run=True)
+                client.async_download_dataset.assert_awaited_once_with("vin", "id", "new.zip")
+                publish.assert_not_called()
+                save.assert_not_called()
+                self.assertEqual(result, 1 if failure else 0)
+                if failure:
+                    self.assertNotIn("Dataset download: ok", output.getvalue())
+                    self.assertIn("download denied", errors.getvalue())
+                else:
+                    self.assertIn("Dataset download: ok", output.getvalue())
+
+    async def test_diagnosis_does_not_claim_download_success_for_empty_listing(self):
+        config = ServiceConfig("user@example.com", "password", mqtt=MqttConfig("mqtt.example"))
+        client = Mock()
+        client.async_login = AsyncMock()
+        client.async_download_dataset = AsyncMock()
+        with tempfile.TemporaryDirectory() as tmp:
+            output = io.StringIO()
+            with patch("vw_euda_mqtt.service.EudaApiClient", return_value=client), \
+                 patch("vw_euda_mqtt.service._select_vehicle_and_identifier", new=AsyncMock(return_value=("vin", "id"))), \
+                 patch("vw_euda_mqtt.service._list_datasets_with_retries", new=AsyncMock(return_value=[])), \
+                 patch("vw_euda_mqtt.service.check_mqtt_connection"), patch("sys.stdout", output):
+                result = await run_diagnose(config, Path(tmp) / "config.json", dry_run=True)
+        self.assertEqual(result, 0)
+        client.async_download_dataset.assert_not_awaited()
+        self.assertIn("Dataset download: not tested", output.getvalue())
 
 
 if __name__ == "__main__":
