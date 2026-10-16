@@ -15,8 +15,8 @@ The former project name was `vw-euda-mqtt`. The new name
 `vwgroup-vehicle2mqtt` describes the scope more broadly: Volkswagen Group
 vehicle data forwarded to MQTT.
 
-The service logs in to `eu-data-act.drivesomethinggreater.com`, follows the
-portal's brand-specific login redirect, downloads the latest continuous-data ZIP
+The service logs in to `eu-data-act.drivesomethinggreater.com` using the
+brand-specific Identity client, downloads the latest continuous-data ZIP
 for a VIN, extracts useful data points, and publishes them to MQTT. MQTT retain
 is disabled by default and must be enabled explicitly with `mqtt.retain=true`.
 
@@ -26,8 +26,7 @@ The login and dataset approach is based on
 ## What It Does
 
 - Logs in with the VW Group account configured in `config.json`.
-- Selects the configured brand through the portal redirect, for example
-  `brand=AUDI&method=login`.
+- Selects the configured brand's Identity client, for example `AUDI`.
 - Handles required VW/Audi Identity onboarding steps.
 - Reads continuous-data metadata and dataset ZIP files.
 - Skips `*_no_content_found.zip` files because they do not contain vehicle
@@ -78,15 +77,20 @@ and will process the first ZIP with real content automatically.
 Even when `brand` is set to `AUDI`, the login pages can still say
 `Volkswagen ID`. Audi uses the VW Group Identity backend.
 
-For login, the service first calls the portal's official brand redirect
-endpoint, for example:
+For known brands, login starts directly at the Identity authorize endpoint with
+the matching public client ID. Other brand names retain the portal redirect
+lookup. There is no preliminary request to the portal home page. Requests use
+the product User-Agent `vwgroup-vehicle2mqtt/<version>` and the configured locale.
 
-```text
-/services/redirect/authentication?brand=AUDI&method=login
-```
+The login flow follows at most ten HTTPS redirects per step on the Identity
+and portal hosts, and stops at `/services/callbacklogin`. This callback must
+issue a nonempty `access_token` cookie usable for the portal API. A direct
+vehicle API request must then return HTTP 200 with valid vehicle API JSON;
+redirects or error responses fail the session check without another login.
 
-It then follows the returned OIDC authorize URL. This avoids using the wrong
-Identity client for Audi vehicles.
+The localized `user.html` CMS page is never fetched. Its status code,
+maintenance state, or availability cannot invalidate the verified session.
+This follows the [VW-contributed evcc login update](https://github.com/evcc-io/evcc/commit/fb838188e97657820a8de98c2a2bc8ac6a9b1e85).
 
 Depending on account state, the first non-browser login can hit these pages:
 
@@ -406,15 +410,16 @@ automatically. If it appears again, run with `--debug` and check the landing URL
 Volkswagen sent a verification email. Open the link in that email, then restart
 the service.
 
-`Authentication failed: Login rejected with HTTP 404`
+`Authentication failed: Login rejected with HTTP 404` or `HTTP 406`
 
-[Issue #4](https://github.com/StephanHenke/vwgroup-vehicle2mqtt/issues/4)
-reports a missing localized landing page (`/se/en/user.html`) after the portal
-login callback. This redirect trace does not indicate missing user consent.
-The service accepts this specific 404 only after a portal callback and a
-successful authenticated vehicle API check. Other HTTP failures remain errors.
-If the session check fails, complete browser login with the same brand account,
-review any required consent or email verification, and run `--diagnose` again.
+[Issue #4](https://github.com/StephanHenke/vwgroup-vehicle2mqtt/issues/4) and
+[issue #5](https://github.com/StephanHenke/vwgroup-vehicle2mqtt/issues/5) report
+errors on the localized CMS landing page after authentication. Version 0.3.1
+stops at the portal callback before requesting that page and verifies the
+session through the vehicle API. A callback error, missing session cookie, or
+failed session check still fails login. Complete browser login with the same
+brand account if consent or email verification is required, then run
+`--diagnose` again.
 Do not share cookies, authorization codes, tokens, or unredacted redirect URLs.
 
 `No continuous-data Identifier returned`

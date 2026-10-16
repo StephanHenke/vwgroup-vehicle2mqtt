@@ -28,7 +28,7 @@ Der Login- und Dataset-Ansatz basiert auf
 ## Was der Dienst tut
 
 - Login beim EU Data Act Portal mit dem Konto aus `config.json`.
-- Markenauswahl über den Portal-Redirect, zum Beispiel `brand=AUDI&method=login`.
+- Markenauswahl über den passenden Identity-Client, zum Beispiel für `AUDI`.
 - Automatische Behandlung der notwendigen VW/Audi Identity Onboarding-Schritte.
 - Abruf der Continuous-Data-Metadaten und ZIP-Datasets.
 - Überspringen von `*_no_content_found.zip`, weil diese Dateien keine
@@ -82,16 +82,23 @@ die erste ZIP-Datei mit echtem Inhalt automatisch.
 Auch bei `brand: "AUDI"` können die Login-Seiten `Volkswagen ID` anzeigen.
 Audi nutzt hier die VW Group Identity Infrastruktur.
 
-Der Dienst ruft zuerst den offiziellen Brand-Redirect des Portals auf, zum
-Beispiel:
+Für bekannte Marken startet der Login direkt am Identity-Authorize-Endpunkt
+mit der passenden öffentlichen Client-ID. Für andere Markennamen bleibt die
+Ermittlung über den Portal-Redirect erhalten. Ein vorheriger Aufruf der
+Portal-Startseite entfällt. Die Anfragen verwenden den Produkt-User-Agent
+`vwgroup-vehicle2mqtt/<version>` und die konfigurierte Sprache.
 
-```text
-/services/redirect/authentication?brand=AUDI&method=login
-```
+Der Login folgt pro Schritt höchstens zehn HTTPS-Weiterleitungen auf die Hosts
+von Identity und Portal und endet bei `/services/callbacklogin`. Dieser Callback
+muss ein nichtleeres, für die Portal-API gültiges `access_token`-Cookie setzen.
+Danach muss eine direkte Fahrzeug-API-Anfrage HTTP 200 mit gültigem
+Fahrzeug-API-JSON liefern. Weiterleitungen und Fehler lassen diese
+Sitzungsprüfung ohne erneuten Login scheitern.
 
-Aus diesem Redirect liest er die korrekte OIDC-Authorize-URL. Das ist wichtig,
-weil Audi einen anderen Identity-Client verwenden kann als der generische
-GIS-Consent-Client.
+Die lokalisierte CMS-Seite `user.html` wird nicht abgerufen. Ihr Statuscode,
+Wartungszustand oder ihre Verfügbarkeit haben keinen Einfluss auf die
+bestätigte Sitzung. Grundlage ist die
+[von VW beigesteuerte evcc-Anpassung](https://github.com/evcc-io/evcc/commit/fb838188e97657820a8de98c2a2bc8ac6a9b1e85).
 
 Je nach Kontostand können beim ersten nicht-browserbasierten Login diese
 Stationen auftreten:
@@ -429,16 +436,16 @@ Fehler erneut auftaucht, mit `--debug` testen und die Ziel-URL prüfen.
 Volkswagen hat eine Bestätigungsmail geschickt. Den Link in der Mail anklicken
 und danach den Dienst neu starten.
 
-`Authentication failed: Login rejected with HTTP 404`
+`Authentication failed: Login rejected with HTTP 404` oder `HTTP 406`
 
-[Issue #4](https://github.com/StephanHenke/vwgroup-vehicle2mqtt/issues/4)
-beschreibt eine fehlende lokalisierte Startseite (`/se/en/user.html`) nach dem
-Portal-Login-Callback. Diese Redirect-Kette deutet nicht auf fehlenden User
-Consent hin. Der Dienst akzeptiert diesen speziellen 404 nur nach einem
-Portal-Callback und erfolgreicher Sitzungsprüfung an der Fahrzeug-API.
-Andere HTTP-Fehler bleiben Fehler. Scheitert die Sitzungsprüfung, den
-Browser-Login mit demselben Markenkonto abschließen, gegebenenfalls nötige
-Einwilligungen oder E-Mail-Bestätigung prüfen und `--diagnose` erneut starten.
+[Issue #4](https://github.com/StephanHenke/vwgroup-vehicle2mqtt/issues/4) und
+[Issue #5](https://github.com/StephanHenke/vwgroup-vehicle2mqtt/issues/5)
+beschreiben Fehler der lokalisierten CMS-Startseite nach der Anmeldung.
+Version 0.3.1 endet am Portal-Callback, bevor diese Seite abgerufen wird, und
+prüft die Sitzung über die Fahrzeug-API. Ein Callback-Fehler, ein fehlendes
+Sitzungscookie oder eine gescheiterte Sitzungsprüfung lässt den Login weiterhin
+scheitern. Bei nötiger Einwilligung oder E-Mail-Bestätigung den Browser-Login
+mit demselben Markenkonto abschließen und danach `--diagnose` erneut starten.
 Keine Cookies, Autorisierungscodes, Tokens oder unredigierten Redirect-URLs teilen.
 
 `No continuous-data Identifier returned`

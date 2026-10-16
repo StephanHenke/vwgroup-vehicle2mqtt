@@ -7,15 +7,22 @@ semantic versioning.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-16
+
 ### Fixed
 
-- Handle a missing localized user landing page after the portal login callback
-  (issue #4). Accept HTTP 404 only when the same-origin callback was followed
-  and a separate authenticated vehicle API request confirms the session.
-  Apply the same check after terms and consent steps; preserve other errors.
+- Stop login at the portal callback instead of fetching the localized CMS
+  landing page, avoiding its HTTP 404/406 failures (issues #4 and #5).
+- Require a newly issued API session cookie and a successful direct vehicle
+  API check before completing login. Preserve Identity, callback and API
+  failures, reject missing/expired cookies and bound trusted HTTPS redirects.
+- Resume optional marketing consent through its validated Identity callback.
 
 ### Changed
 
+- Start known brands directly at their Identity client without a portal-home
+  request; identify the client with a versioned product User-Agent and send
+  the configured login locale.
 - Raise the minimum aiohttp version from 3.14.0 to 3.14.3 (Dependabot #3).
 
 ## [0.3.0] - 2026-06-05
