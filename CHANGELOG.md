@@ -7,6 +7,27 @@ semantic versioning.
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-11-02
+
+### Fixed
+
+- Process every unread continuous package and persist the last valid reading
+  per original datapoint key across missing fields and restarts (#9).
+- Accept valid `battery_level_HV.value` as another source for the existing
+  `battery/soc` topic without changing structured names/keys or discovery IDs.
+- Use only explicit per-datapoint timestamps. Never assign a neighbouring
+  `car_captured_time` to another measurement or export that inferred time in
+  history. Preserve original raw files and package-specific history batches.
+- Do not refresh an omitted SOC's MQTT receive time. Keep the original source
+  key, dataset and delivery timestamp separate from its measurement time.
+- Detect failed MQTT publications and write state atomically so interrupted
+  downloads/publications remain retryable.
+
+### Changed
+
+- Split polling, publishing, configuration and dataset handling into focused
+  modules while preserving the CLI entrypoints, existing MQTT paths and IDs.
+
 ## [0.3.1] - 2026-10-16
 
 ### Fixed

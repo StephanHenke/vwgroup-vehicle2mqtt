@@ -28,9 +28,12 @@ Dieses Topic ist immer live-only und wird nie retained.
 
 ## Batch-Format
 
-Der Batch enthaelt alle Datenpunkte, die einem `car_captured_time` zugeordnet
-werden konnten. `car_captured_time` selbst wird nicht als Messwert exportiert,
-sondern nur als Zeitanker fuer die umliegenden Datenpunkte verwendet.
+Der Batch enthaelt nur Datenpunkte mit einem eigenen gueltigen `timestampUtc`,
+`timestampUTC` oder `timestamp`. Ein separates `car_captured_time` datiert keine
+Nachbarwerte und wird nicht als Messwert exportiert. Ein kontinuierliches Paket
+ohne eigene Messzeiten kann deshalb einen leeren History-Batch liefern, obwohl
+seine Werte als letzter bekannter Live-Stand verfuegbar sind. Bereits falsch
+datierte Persistence-Eintraege werden nicht automatisch veraendert.
 
 Vereinfachtes Beispiel:
 
@@ -105,6 +108,12 @@ Weg als MQTT-State-Updates, z. B. Recorder-/Statistics-Import fuer numerische
 Langzeitstatistiken oder eine externe Timeseries-Datenbank.
 
 ## English
+
+History includes only datapoints with their own valid `timestampUtc`,
+`timestampUTC` or `timestamp`. A separate `car_captured_time` does not date its
+neighbours. Continuous packages can therefore have an empty history batch
+while still supplying live readings. Existing incorrectly dated persistence
+records are not automatically rewritten.
 
 A VW/Audi dataset can contain multiple values of the same datapoint captured at
 different vehicle-side timestamps. MQTT consumers usually persist the receive

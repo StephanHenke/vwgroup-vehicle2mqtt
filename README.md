@@ -250,6 +250,27 @@ docker compose up -d --build
 
 ## MQTT Topics
 
+Continuous ZIPs are partial updates, not complete snapshots. The service reads
+every unread continuous package in delivery order and persists the last valid
+reading per original datapoint key in `state_file`. Missing or invalid readings
+do not erase the previous value. Keep the state directory mounted across
+container replacements.
+
+`battery/soc` accepts `battery_state_report.soc` and `battery_level_HV.value`
+when its matching status is `VALID`. It selects the latest supported reading
+without changing existing MQTT topics, structured names/keys or Home Assistant
+entity IDs. Other existing topics use the same last-known-state handling.
+
+An omitted SOC is not republished by default, so evcc's receive-time timeout
+is not reset by an unrelated package. `mqtt.retain=true` supplies reconnecting
+clients with the last value; retain remains disabled by default.
+`publish_unchanged=true` explicitly opts into republishing unchanged snapshots.
+
+Normalized readings include `source_key`, `source_dataset` and
+`source_delivered_at` child topics. Structured readings also include
+`source_dataset` and `source_delivered_at`. Delivery time is not measurement
+time. Raw files and history batches always refer to their original package.
+
 Default base topic:
 
 ```text
@@ -291,15 +312,14 @@ Selected topics:
 - `climate/remaining_time_s`
 - `<normalized-topic>/car_captured_at`
 
-`status/car_captured_at` is derived from the payload's `car_captured_time`
-entries. According to the VW/Audi data dictionary, this is a UTC timestamp for
-when the report was created or sent on the vehicle-side path from ICAS1/OCU to
-the backend. Real payloads contain multiple `car_captured_time` entries; each
-one closes the preceding datapoint group. The service therefore publishes the
-latest such value as the dataset timestamp and also exposes datapoint-specific
-capture metadata under `<normalized-topic>/car_captured_at`. If a payload ends
-with datapoints after the last `car_captured_time`, those trailing datapoints
-are assigned to the last known capture timestamp.
+`status/car_captured_at` is the latest valid vehicle timestamp in the package,
+not the measurement time of every value. A flat array's order does not identify
+which measurement belongs to a separate `car_captured_time` entry. Only a
+datapoint's own `timestampUtc`, `timestampUTC` or `timestamp` supplies its
+measurement time. Unknown times stay empty in structured data and the live
+cache, and those values are excluded from history backfill. Capture-time
+entries date themselves only. Previously stored or retained incorrect capture
+times are not automatically repaired.
 `status/captured_at` remains as a compatibility alias.
 `status/last_poll_at` and `status/last_success_at` are service-side timestamps.
 `status/data_age_seconds` is calculated from `car_captured_at`; `status/stale`
@@ -309,7 +329,7 @@ Normalized vehicle topics:
 
 | MQTT topic | Source field | Meaning |
 | --- | --- | --- |
-| `battery/soc` | `battery_state_report.soc` | Battery state of charge in percent |
+| `battery/soc` | `battery_state_report.soc` or valid `battery_level_HV.value` | Last known battery state of charge in percent |
 | `battery/target_soc` | `settings.target_soc` | Configured charging target in percent |
 | `battery/charge_bulk_threshold` | `battery_state_report.charge_bulk_threshold` | Bulk charging threshold in percent |
 | `battery/charge_power_kw` | `battery_state_report.charge_power` | Reported charging power |

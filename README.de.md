@@ -271,6 +271,29 @@ sudo docker logs -f vwgroup-vehicle2mqtt
 
 ## MQTT-Topics
 
+Kontinuierliche ZIPs sind Teilaktualisierungen, keine vollstaendigen Snapshots.
+Der Dienst liest alle ungelesenen kontinuierlichen Pakete in
+Bereitstellungsreihenfolge und speichert den letzten gueltigen Wert je
+originalem Datenpunkt-Key in `state_file`. Fehlende oder ungueltige Werte
+loeschen den vorherigen Stand nicht. Das State-Verzeichnis muss beim
+Containertausch erhalten bleiben.
+
+`battery/soc` beruecksichtigt `battery_state_report.soc` und
+`battery_level_HV.value`, wenn dessen zugehoeriger Status `VALID` ist. Der neueste
+unterstuetzte Wert wird verwendet, ohne bestehende MQTT-Topics,
+Structured-Namen/-Keys oder Home-Assistant-IDs zu aendern. Andere bestehende
+Topics nutzen dieselbe Verwaltung des letzten bekannten Standes.
+
+Ein fehlender SOC wird standardmaessig nicht erneut gesendet. So setzt ein
+anderes Paket evccs Empfangszeit-Timeout nicht zurueck. `mqtt.retain=true`
+liefert neuen Abonnenten den letzten Wert; Retain bleibt standardmaessig aus.
+`publish_unchanged=true` aktiviert bewusst unveraenderte Snapshot-Ausgaben.
+
+Normalisierte Werte erhalten die Untertopics `source_key`, `source_dataset`
+und `source_delivered_at`; Structured-Werte erhalten `source_dataset` und
+`source_delivered_at`. Bereitstellungszeit ist keine Messzeit. Raw-Dateien und
+History-Batches beziehen sich immer auf ihr Originalpaket.
+
 Standard-Basis:
 
 ```text
@@ -312,16 +335,14 @@ Auswahl der veröffentlichten Topics:
 - `climate/remaining_time_s`
 - `<normalized-topic>/car_captured_at`
 
-`status/car_captured_at` ist aus den `car_captured_time`-Einträgen des Pakets
-abgeleitet. Laut VW/Audi-Datenbeschreibung ist dies ein UTC-Zeitpunkt, an dem
-der Bericht fahrzeugseitig bzw. auf dem Weg von ICAS1/OCU zum Backend
-erzeugt/gesendet wurde. Reale Pakete enthalten mehrere
-`car_captured_time`-Einträge; jeder dieser Zeitstempel schließt die davor stehende
-Datenpunkt-Gruppe ab. Der Dienst nutzt den neuesten dieser Werte als
-Datensatz-Zeitstempel und veröffentlicht die Zeitstempel zusätzlich passend zum
-normalisierten Datenpunkt unter `<normalized-topic>/car_captured_at`. Endet ein
-Paket mit Datenpunkten nach dem letzten `car_captured_time`, werden diese
-Nachläufer dem letzten bekannten Capture-Zeitstempel zugeordnet.
+`status/car_captured_at` ist der neueste gueltige Fahrzeugzeitstempel im Paket,
+nicht die Messzeit aller Werte. Die Reihenfolge eines flachen Arrays belegt
+keine Zuordnung zu einem separaten `car_captured_time`. Nur das eigene Feld
+`timestampUtc`, `timestampUTC` oder `timestamp` liefert die Messzeit eines
+Datenpunkts. Unbekannte Zeiten bleiben in Structured-Daten und Live-Cache leer;
+diese Werte werden nicht in die History uebernommen. Capture-Time-Eintraege
+datieren nur sich selbst. Bereits gespeicherte oder retained veroeffentlichte
+falsche Zeitangaben werden nicht automatisch repariert.
 `status/captured_at` bleibt als kompatibler Alias erhalten.
 `status/last_poll_at` und `status/last_success_at` sind Zeitstempel des
 Dienstes. `status/data_age_seconds` wird aus `car_captured_at` berechnet;
@@ -332,7 +353,7 @@ Normalisierte Fahrzeug-Topics:
 
 | MQTT-Topic | Quellfeld | Bedeutung |
 | --- | --- | --- |
-| `battery/soc` | `battery_state_report.soc` | Ladezustand der Batterie in Prozent |
+| `battery/soc` | `battery_state_report.soc` oder gueltiger `battery_level_HV.value` | Letzter bekannter Ladezustand in Prozent |
 | `battery/target_soc` | `settings.target_soc` | Eingestelltes Ladeziel in Prozent |
 | `battery/charge_bulk_threshold` | `battery_state_report.charge_bulk_threshold` | Bulk-Ladeschwelle in Prozent |
 | `battery/charge_power_kw` | `battery_state_report.charge_power` | Gemeldete Ladeleistung |
