@@ -418,7 +418,7 @@ class PublishTests(unittest.TestCase):
             ],
         )
 
-        with patch("vw_euda_mqtt.service.MqttPublisher", fake_class):
+        with patch("vw_euda_mqtt.publishing.MqttPublisher", fake_class):
             publish_dataset(config, "TESTVIN1234567890", "dataset.zip", dataset, raw_payload, download=download)
 
         published = dict(fake_class.instances[-1].published)
@@ -494,7 +494,7 @@ class PublishTests(unittest.TestCase):
         }
         dataset = Dataset.from_json(raw_payload)
 
-        with patch("vw_euda_mqtt.service.MqttPublisher", fake_class):
+        with patch("vw_euda_mqtt.publishing.MqttPublisher", fake_class):
             publish_dataset(config, "TESTVIN1234567890", "dataset.zip", dataset, raw_payload)
 
         self.assertFalse(any(fake_class.instances[-1].retained.values()))
@@ -522,7 +522,7 @@ class PublishTests(unittest.TestCase):
         }
         dataset = Dataset.from_json(raw_payload)
 
-        with patch("vw_euda_mqtt.service.MqttPublisher", fake_class):
+        with patch("vw_euda_mqtt.publishing.MqttPublisher", fake_class):
             publish_dataset(config, "TESTVIN1234567890", "dataset.zip", dataset, raw_payload)
 
         topic = "vw/euda/TESTVIN1234567890/history/batch/json"
@@ -553,7 +553,7 @@ class PublishTests(unittest.TestCase):
         }
         dataset = Dataset.from_json(raw_payload)
 
-        with patch("vw_euda_mqtt.service.MqttPublisher", fake_class):
+        with patch("vw_euda_mqtt.publishing.MqttPublisher", fake_class):
             publish_dataset(config, "TESTVIN1234567890", "dataset.zip", dataset, raw_payload)
 
         published = dict(fake_class.instances[-1].published)
@@ -575,7 +575,7 @@ class PublishTests(unittest.TestCase):
         dataset = Dataset.from_json(raw_payload)
         state: dict[str, object] = {}
 
-        with patch("vw_euda_mqtt.service.MqttPublisher", fake_class):
+        with patch("vw_euda_mqtt.publishing.MqttPublisher", fake_class):
             publish_dataset(config, "TESTVIN1234567890", "dataset.zip", dataset, raw_payload, state=state)
 
         published = dict(fake_class.instances[-1].published)
@@ -606,7 +606,7 @@ class PublishTests(unittest.TestCase):
             "last_odometer_car_captured_at": "2026-01-02T03:04:05+00:00",
         }
 
-        with patch("vw_euda_mqtt.service.MqttPublisher", fake_class):
+        with patch("vw_euda_mqtt.publishing.MqttPublisher", fake_class):
             publish_dataset(config, "TESTVIN1234567890", "dataset.zip", dataset, raw_payload, state=state)
 
         published = dict(fake_class.instances[-1].published)
@@ -633,7 +633,7 @@ class PublishTests(unittest.TestCase):
         dataset = Dataset.from_json(raw_payload)
         state: dict[str, object] = {"last_odometer_km": 63151}
 
-        with patch("vw_euda_mqtt.service.MqttPublisher", fake_class):
+        with patch("vw_euda_mqtt.publishing.MqttPublisher", fake_class):
             publish_dataset(config, "TESTVIN1234567890", "dataset.zip", dataset, raw_payload, state=state)
 
         published = dict(fake_class.instances[-1].published)
@@ -648,7 +648,7 @@ class PublishTests(unittest.TestCase):
             mqtt=MqttConfig(host="mqtt.example.local", base_topic="vw/euda"),
         )
 
-        with patch("vw_euda_mqtt.service.MqttPublisher", fake_class):
+        with patch("vw_euda_mqtt.publishing.MqttPublisher", fake_class):
             publish_status(config, connected=False, error="boom", error_type="ApiError")
 
         published = dict(fake_class.instances[-1].published)
@@ -787,7 +787,7 @@ class PublishTests(unittest.TestCase):
         }
         dataset = Dataset.from_json(raw_payload)
 
-        with patch("vw_euda_mqtt.service.MqttPublisher", fake_class):
+        with patch("vw_euda_mqtt.publishing.MqttPublisher", fake_class):
             publish_dataset(config, "TESTVIN1234567890", "dataset.zip", dataset, raw_payload)
 
         published = dict(fake_class.instances[-1].published)
@@ -806,9 +806,9 @@ class RunServiceTests(unittest.TestCase):
         )
 
         with (
-            patch("vw_euda_mqtt.service.poll_once", side_effect=RuntimeError("boom")),
-            patch("vw_euda_mqtt.service.publish_error_status") as publish_error,
-            patch("vw_euda_mqtt.service.LOG.exception"),
+            patch("vw_euda_mqtt.runtime.poll_once", side_effect=RuntimeError("boom")),
+            patch("vw_euda_mqtt.runtime.publish_error_status") as publish_error,
+            patch("vw_euda_mqtt.runtime.LOG.exception"),
         ):
             asyncio.run(run_service(config, Path("config.json"), once=True, dry_run=True))
 
