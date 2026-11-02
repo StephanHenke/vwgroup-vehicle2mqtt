@@ -1,17 +1,19 @@
-"""State helpers."""
+"""State-file helpers and value stabilization."""
 
 from __future__ import annotations
 
-from pathlib import Path
-from datetime import datetime,timezone
-from typing import Any
 import json
 import logging
+import os
 import sys
+import tempfile
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
 from .config import ServiceConfig
-LOG=logging.getLogger(__name__)
 
-
+LOG = logging.getLogger(__name__)
 HEALTHCHECK_MISSED_POLLS = 4
 
 
@@ -29,7 +31,17 @@ def _load_state(path: Path) -> dict:
 
 def _save_state(path: Path, state: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, delete=False) as stream:
+            temporary = Path(stream.name)
+            json.dump(state, stream, indent=2, sort_keys=True, allow_nan=False)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def _parse_datetime(value: Any) -> datetime | None:
@@ -68,7 +80,15 @@ def _stabilize_odometer(values: dict[str, Any], state: dict) -> None:
     current = _numeric_value(values["odometer/km"])
     previous = _numeric_value(state.get("last_odometer_km"))
     current_captured_at = values.get("odometer/km/car_captured_at")
-    previous_captured_at = state.get("last_odometer_car_captured_at")
+    # Older state files may contain timestamps inferred from array position.
+    previous_captured_at = (
+        state.get("last_odometer_car_captured_at")
+        if state.get("last_odometer_capture_source") == "datapoint"
+        else None
+    )
+    if not previous_captured_at:
+        state.pop("last_odometer_car_captured_at", None)
+        state.pop("last_odometer_capture_source", None)
 
     if current is None or current <= 0:
         if previous is not None:
@@ -96,6 +116,10 @@ def _stabilize_odometer(values: dict[str, Any], state: dict) -> None:
     state["last_odometer_km"] = int(current) if current.is_integer() else current
     if isinstance(current_captured_at, str) and current_captured_at:
         state["last_odometer_car_captured_at"] = current_captured_at
+        state["last_odometer_capture_source"] = "datapoint"
+    else:
+        state.pop("last_odometer_car_captured_at", None)
+        state.pop("last_odometer_capture_source", None)
 
 
 def healthcheck(config: ServiceConfig, config_path: Path) -> int:

@@ -1,10 +1,12 @@
-"""Mqtt helpers."""
+"""MQTT publishing primitives and retain policy."""
 
 from __future__ import annotations
 
-from typing import Any
 import json
+from typing import Any
+
 import paho.mqtt.client as mqtt
+
 from .config import MqttConfig
 
 
@@ -46,7 +48,7 @@ class MqttPublisher:
             retain=retain_message,
         )
         result.wait_for_publish(timeout=10)
-        if result.rc != mqtt.MQTT_ERR_SUCCESS:
+        if result.rc != mqtt.MQTT_ERR_SUCCESS or not result.is_published():
             raise RuntimeError(f"MQTT publish failed for {topic}: rc={result.rc}")
 
 

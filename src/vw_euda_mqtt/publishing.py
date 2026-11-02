@@ -12,6 +12,7 @@ from .data import Dataset,curated_values,curated_capture_values,structured_value
 from .mqtt import MqttPublisher,_retain_for_topic
 from .homeassistant import publish_homeassistant_discovery
 from .state import _stabilize_odometer
+from .live_state import LiveState
 LOG=logging.getLogger(__name__)
 
 
@@ -50,6 +51,8 @@ def publish_dataset(
     download: DatasetDownload | None = None,
     state: dict | None = None,
     dry_run: bool = False,
+    live_state: LiveState | None = None,
+    publish_live: bool = True,
 ) -> None:
     assert config.mqtt is not None
     base = f"{config.mqtt.base_topic}/{vin}"
@@ -70,23 +73,32 @@ def publish_dataset(
             for topic, value in _status_timing_values(config, now=now, car_captured_at=dataset.captured_at).items()
         }
     )
-    values.update(curated_values(dataset))
-    values.update(curated_capture_values(dataset))
-    if state is not None:
+    if not publish_live:
+        values.clear()
+    elif live_state is not None:
+        values.update(live_state.values(structured=config.mqtt.publish_raw, only_updated=not config.publish_unchanged))
+    else:
+        values.update(curated_values(dataset))
+        values.update(curated_capture_values(dataset))
+    if state is not None and publish_live:
         _stabilize_odometer(values, state)
     if config.mqtt.publish_raw:
-        values.update(structured_values(dataset))
+        if publish_live and live_state is None:
+            values.update(structured_values(dataset))
         if download is not None:
             values.update(raw_file_values(download))
     if config.mqtt.publish_history:
         values["history/batch/json"] = history_batch(dataset, dataset_name)
 
+    if not values:
+        return
+
     with MqttPublisher(config.mqtt, dry_run=dry_run) as publisher:
-        if config.mqtt.publish_homeassistant_discovery:
+        if config.mqtt.publish_homeassistant_discovery and publish_live:
             publish_homeassistant_discovery(publisher, config.mqtt, vin)
         for topic, value in sorted(values.items()):
             publisher.publish(f"{base}/{topic}", value, retain=_retain_for_topic(config.mqtt, topic, value))
-        if config.mqtt.publish_carcompat:
+        if config.mqtt.publish_carcompat and publish_live:
             publish_carcompat(publisher, config.mqtt, vin, values)
 
 

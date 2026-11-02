@@ -392,8 +392,19 @@ class PublishTests(unittest.TestCase):
         )
         raw_payload = {
             "Data": [
-                {"key": "soc", "dataFieldName": "battery_state_report.soc", "value": "80"},
-                {"key": "range", "dataFieldName": "range", "value": "321"},
+                {"key": "soc", "dataFieldName": "battery_state_report.soc", "value": "80", "timestampUtc": "2026-01-02T03:04:05Z"},
+                {"key": "range", "dataFieldName": "range", "value": "321", "timestampUtc": "2026-01-02T03:04:05Z"},
+                {
+                    "key": "remaining_complete",
+                    "dataFieldName": "battery_state_report.remaining_charging_time_complete",
+                    "value": "3600s",
+                    "timestampUtc": "2026-01-02T03:04:05Z",
+                },
+                {
+                    "key": "timer_finish",
+                    "dataFieldName": "profile_state_report.next_charging_timer_information.estimated_finish_time",
+                    "value": "2026-01-02T05:00:00Z",
+                },
                 {"key": "captured", "dataFieldName": "car_captured_time", "value": "2026-01-02T03:04:05Z"},
             ]
         }
@@ -514,9 +525,9 @@ class PublishTests(unittest.TestCase):
         raw_payload = {
             "vin": "TESTVIN1234567890",
             "Data": [
-                {"key": "soc", "dataFieldName": "battery_state_report.soc", "value": "77"},
+                {"key": "soc", "dataFieldName": "battery_state_report.soc", "value": "77", "timestampUtc": "2026-01-02T03:04:05Z"},
                 {"key": "captured_old", "dataFieldName": "car_captured_time", "value": "2026-01-02T03:04:05Z"},
-                {"key": "soc", "dataFieldName": "battery_state_report.soc", "value": "78"},
+                {"key": "soc", "dataFieldName": "battery_state_report.soc", "value": "78", "timestampUtc": "2026-01-02T03:05:05Z"},
                 {"key": "captured_new", "dataFieldName": "car_captured_time", "value": "2026-01-02T03:05:05Z"},
             ],
         }
@@ -568,7 +579,7 @@ class PublishTests(unittest.TestCase):
         )
         raw_payload = {
             "Data": [
-                {"key": "odometer", "dataFieldName": "mileage.value", "value": "63151"},
+                {"key": "odometer", "dataFieldName": "mileage.value", "value": "63151", "timestampUtc": "2026-01-02T03:04:05Z"},
                 {"key": "captured", "dataFieldName": "car_captured_time", "value": "2026-01-02T03:04:05Z"},
             ]
         }
@@ -586,6 +597,7 @@ class PublishTests(unittest.TestCase):
         )
         self.assertEqual(state["last_odometer_km"], 63151)
         self.assertEqual(state["last_odometer_car_captured_at"], "2026-01-02T03:04:05+00:00")
+        self.assertEqual(state["last_odometer_capture_source"], "datapoint")
 
     def test_publish_dataset_keeps_previous_odometer_when_new_value_is_zero(self) -> None:
         fake_class = _recording_publisher_class()
@@ -604,6 +616,7 @@ class PublishTests(unittest.TestCase):
         state: dict[str, object] = {
             "last_odometer_km": 63151,
             "last_odometer_car_captured_at": "2026-01-02T03:04:05+00:00",
+            "last_odometer_capture_source": "datapoint",
         }
 
         with patch("vw_euda_mqtt.publishing.MqttPublisher", fake_class):

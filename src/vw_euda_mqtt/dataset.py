@@ -1,22 +1,15 @@
-"""Dataset helpers."""
+"""Dataset parsing and curated value extraction."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass,field
-from datetime import datetime,timezone
-from typing import Any
 import re
-
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any
 
 INT_RE = re.compile(r"^-?\d+$")
-
-
 FLOAT_RE = re.compile(r"^-?\d+\.\d+$")
-
-
 DURATION_RE = re.compile(r"^(-?\d+(?:\.\d+)?)\s*s$", re.I)
-
-
 TOPIC_SAFE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 
 
@@ -38,19 +31,24 @@ def parse_value(raw: str | None) -> Any:
     return value
 
 
-def parse_timestamp(raw: str | None) -> datetime | None:
-    value = (raw or "").strip()
+def parse_timestamp(raw: str | int | None) -> datetime | None:
+    if isinstance(raw, bool) or not isinstance(raw, (str, int)):
+        return None
+    value = str(raw).strip()
     if not value:
         return None
     if INT_RE.match(value) and len(value) >= 12:
         try:
             return datetime.fromtimestamp(int(value) / 1000, tz=timezone.utc)
-        except (OSError, ValueError):
+        except (OSError, OverflowError, ValueError):
             return None
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(timezone.utc)
 
 
 def topic_safe(value: str) -> str:
@@ -88,6 +86,7 @@ class DataPoint:
 
 @dataclass
 class DataGroup:
+    """Points sharing a known measurement time, or an untimed bucket."""
     index: int
     captured_at: datetime | None
     points: list[DataPoint] = field(default_factory=list)
@@ -103,21 +102,8 @@ class Dataset:
 
     @classmethod
     def from_json(cls, payload: dict) -> "Dataset":
-        points: dict[str, DataPoint] = {}
-        groups: list[DataGroup] = []
-        pending_group: list[DataPoint] = []
-
-        def close_group(captured_at: datetime | None) -> None:
-            if not pending_group:
-                return
-            group_index = len(groups)
-            group_points = list(pending_group)
-            for point in group_points:
-                point.group_index = group_index
-                point.car_captured_at = captured_at
-            groups.append(DataGroup(index=group_index, captured_at=captured_at, points=group_points))
-            pending_group.clear()
-
+        by_time: dict[datetime | None, list[DataPoint]] = {}
+        captured: list[datetime] = []
         for item in payload.get("Data", []):
             key = item.get("key")
             if not key:
@@ -127,23 +113,45 @@ class Dataset:
                 key=key,
                 field_name=field_name,
                 raw_value=item.get("value", ""),
+                car_captured_at=next(
+                    (
+                        timestamp
+                        for name in ("timestampUtc", "timestampUTC", "timestamp")
+                        if (timestamp := parse_timestamp(item.get(name))) is not None
+                    ),
+                    None,
+                ),
             )
-            points[key] = datapoint
-            pending_group.append(datapoint)
             if field_name == "car_captured_time":
                 timestamp = parse_timestamp(datapoint.raw_value)
-                close_group(timestamp)
+                if timestamp is not None:
+                    captured.append(timestamp)
+                    if datapoint.car_captured_at is None:
+                        datapoint.car_captured_at = timestamp
+            if datapoint.car_captured_at is not None:
+                captured.append(datapoint.car_captured_at)
+            # A flat array contains no report membership. A capture-time row
+            # dates itself only; its neighbours must never inherit its value.
+            by_time.setdefault(datapoint.car_captured_at, []).append(datapoint)
 
-        if pending_group and groups:
-            last_group = groups[-1]
-            for point in list(pending_group):
-                point.group_index = last_group.index
-                point.car_captured_at = last_group.captured_at
-                last_group.points.append(point)
-            pending_group.clear()
-        else:
-            close_group(None)
-        captured = [group.captured_at for group in groups if group.captured_at is not None]
+        groups: list[DataGroup] = []
+        points: dict[str, DataPoint] = {}
+        ordered_times = sorted(
+            by_time,
+            key=lambda timestamp: (timestamp is None, timestamp or datetime.max.replace(tzinfo=timezone.utc)),
+        )
+        for timestamp in ordered_times:
+            group_points = sorted(
+                by_time[timestamp], key=lambda point: (point.key, point.field_name, point.raw_value or ""),
+            )
+            index = len(groups)
+            for point in group_points:
+                point.group_index = index
+            groups.append(DataGroup(index=index, captured_at=timestamp, points=group_points))
+        # Keep every source record in groups, and expose the freshest known
+        # reading per key as live state. Ties do not depend on array order.
+        for point in sorted((point for group in groups for point in group.points), key=_point_selection_key):
+            points.setdefault(point.key, point)
         return cls(
             vin=payload.get("vin", ""),
             user_id=payload.get("user_id"),
@@ -154,10 +162,15 @@ class Dataset:
 
     def by_field(self, field_name: str) -> DataPoint | None:
         matches = [point for point in self.points.values() if point.field_name == field_name]
-        if not matches:
-            return None
-        latest_capture = max((point.car_captured_at for point in matches if point.car_captured_at), default=None)
-        if latest_capture is not None:
-            latest_matches = [point for point in matches if point.car_captured_at == latest_capture]
-            return min(latest_matches, key=lambda point: point.key)
-        return min(matches, key=lambda point: point.key)
+        return min(matches, key=_point_selection_key) if matches else None
+
+
+def _point_selection_key(point: DataPoint) -> tuple[bool, float, str, str, str]:
+    timestamp = point.car_captured_at
+    return (
+        timestamp is None,
+        -timestamp.timestamp() if timestamp is not None else 0,
+        point.key,
+        point.field_name,
+        point.raw_value or "",
+    )

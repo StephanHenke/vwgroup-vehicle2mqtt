@@ -16,6 +16,7 @@ class DataCatalogEntry:
 
 CURATED_TOPIC_FIELDS: dict[str, tuple[str, str | None]] = {
     "battery_state_report.soc": ("battery/soc", "%"),
+    "battery_level_HV.value": ("battery/soc", "%"),
     "settings.target_soc": ("battery/target_soc", "%"),
     "battery_state_report.charge_bulk_threshold": ("battery/charge_bulk_threshold", "%"),
     "battery_state_report.charge_power": ("battery/charge_power_kw", "kW"),
@@ -149,7 +150,7 @@ DATA_CATALOG_BY_FIELD: dict[str, DataCatalogEntry] = {
     ),
     "car_captured_time": DataCatalogEntry(
         name="car_captured_time",
-        description="Vehicle-side capture timestamp assigned to the surrounding datapoint group.",
+        description="Vehicle-side report capture timestamp; flat payloads do not identify its associated measurement fields.",
         data_type="timestamp",
         cluster="Metadata",
     ),

@@ -67,10 +67,10 @@ class DatasetTests(unittest.TestCase):
                 "vin": "TESTVIN1234567890",
                 "user_id": "user-1",
                 "Data": [
-                    {"key": "soc_old", "dataFieldName": "battery_state_report.soc", "value": "77"},
+                    {"key": "soc_old", "dataFieldName": "battery_state_report.soc", "value": "77", "timestampUtc": "2026-01-02T03:04:05Z"},
                     {"key": "captured_old", "dataFieldName": "car_captured_time", "value": "2026-01-02T03:04:05Z"},
                     {"dataFieldName": "ignored-no-key", "value": "123"},
-                    {"key": "soc_new", "dataFieldName": "battery_state_report.soc", "value": "78"},
+                    {"key": "soc_new", "dataFieldName": "battery_state_report.soc", "value": "78", "timestampUtc": "2026-01-02T03:05:05Z"},
                     {"key": "captured_new", "dataFieldName": "car_captured_time", "value": "2026-01-02T03:05:05Z"},
                 ],
             }
@@ -82,8 +82,8 @@ class DatasetTests(unittest.TestCase):
         self.assertEqual(dataset.user_id, "user-1")
         self.assertEqual(dataset.captured_at, new_capture)
         self.assertEqual(len(dataset.groups), 2)
-        self.assertEqual([point.key for point in dataset.groups[0].points], ["soc_old", "captured_old"])
-        self.assertEqual([point.key for point in dataset.groups[1].points], ["soc_new", "captured_new"])
+        self.assertEqual([point.key for point in dataset.groups[0].points], ["captured_old", "soc_old"])
+        self.assertEqual([point.key for point in dataset.groups[1].points], ["captured_new", "soc_new"])
         self.assertEqual(dataset.points["soc_old"].group_index, 0)
         self.assertEqual(dataset.points["soc_old"].car_captured_at, old_capture)
         self.assertEqual(dataset.points["captured_new"].car_captured_at, new_capture)
@@ -103,13 +103,13 @@ class DatasetTests(unittest.TestCase):
         self.assertEqual(dataset.by_field("range").key, "a")
         self.assertEqual(dataset.by_field("range").value, 301)
 
-    def test_by_field_prefers_latest_car_capture_group(self) -> None:
+    def test_by_field_prefers_latest_explicit_measurement_time(self) -> None:
         dataset = Dataset.from_json(
             {
                 "Data": [
-                    {"key": "newer_lexically", "dataFieldName": "range", "value": "300"},
+                    {"key": "newer_lexically", "dataFieldName": "range", "value": "300", "timestampUtc": "2026-01-02T03:04:05Z"},
                     {"key": "captured_old", "dataFieldName": "car_captured_time", "value": "2026-01-02T03:04:05Z"},
-                    {"key": "a_older_lexically", "dataFieldName": "range", "value": "301"},
+                    {"key": "a_older_lexically", "dataFieldName": "range", "value": "301", "timestampUtc": "2026-01-02T03:05:05Z"},
                     {"key": "captured_new", "dataFieldName": "car_captured_time", "value": "2026-01-02T03:05:05Z"},
                 ]
             }
@@ -118,7 +118,7 @@ class DatasetTests(unittest.TestCase):
         self.assertEqual(dataset.by_field("range").key, "a_older_lexically")
         self.assertEqual(dataset.by_field("range").value, 301)
 
-    def test_trailing_points_inherit_last_capture_time(self) -> None:
+    def test_neither_preceding_nor_trailing_points_inherit_capture_time(self) -> None:
         dataset = Dataset.from_json(
             {
                 "Data": [
@@ -130,20 +130,23 @@ class DatasetTests(unittest.TestCase):
         )
 
         captured_at = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
-        self.assertEqual(len(dataset.groups), 1)
-        self.assertEqual([point.key for point in dataset.groups[0].points], ["range", "captured", "soc"])
-        self.assertEqual(dataset.points["soc"].group_index, 0)
-        self.assertEqual(dataset.points["soc"].car_captured_at, captured_at)
-        self.assertEqual(curated_capture_values(dataset)["battery/soc/car_captured_at"], captured_at.isoformat())
+        self.assertEqual(len(dataset.groups), 2)
+        self.assertEqual([point.key for point in dataset.groups[0].points], ["captured"])
+        self.assertEqual([point.key for point in dataset.groups[1].points], ["range", "soc"])
+        self.assertEqual(dataset.points["captured"].car_captured_at, captured_at)
+        self.assertIsNone(dataset.points["soc"].car_captured_at)
+        self.assertIsNone(dataset.points["range"].car_captured_at)
+        self.assertEqual(curated_capture_values(dataset), {})
+        self.assertEqual(history_batch(dataset, "flat.zip")["events"], [])
 
     def test_curated_and_structured_values_use_expected_topics(self) -> None:
         dataset = Dataset.from_json(
             {
                 "Data": [
-                    {"key": "soc", "dataFieldName": "battery_state_report.soc", "value": "80"},
-                    {"key": "range", "dataFieldName": "range", "value": "321"},
-                    {"key": "door", "dataFieldName": "locked", "value": "true"},
-                    {"key": "odd", "dataFieldName": "bad field/name", "value": "text"},
+                    {"key": "soc", "dataFieldName": "battery_state_report.soc", "value": "80", "timestampUtc": "2026-01-02T03:04:05Z"},
+                    {"key": "range", "dataFieldName": "range", "value": "321", "timestampUtc": "2026-01-02T03:04:05Z"},
+                    {"key": "door", "dataFieldName": "locked", "value": "true", "timestampUtc": "2026-01-02T03:04:05Z"},
+                    {"key": "odd", "dataFieldName": "bad field/name", "value": "text", "timestampUtc": "2026-01-02T03:04:05Z"},
                     {"key": "captured", "dataFieldName": "car_captured_time", "value": "2026-01-02T03:04:05Z"},
                 ]
             }
@@ -227,9 +230,9 @@ class DatasetTests(unittest.TestCase):
             {
                 "vin": "TESTVIN1234567890",
                 "Data": [
-                    {"key": "soc", "dataFieldName": "battery_state_report.soc", "value": "77"},
+                    {"key": "soc", "dataFieldName": "battery_state_report.soc", "value": "77", "timestampUtc": "2026-01-02T03:04:05Z"},
                     {"key": "captured_old", "dataFieldName": "car_captured_time", "value": "2026-01-02T03:04:05Z"},
-                    {"key": "soc", "dataFieldName": "battery_state_report.soc", "value": "78"},
+                    {"key": "soc", "dataFieldName": "battery_state_report.soc", "value": "78", "timestampUtc": "2026-01-02T03:05:05Z"},
                     {"key": "captured_new", "dataFieldName": "car_captured_time", "value": "2026-01-02T03:05:05Z"},
                     {"key": "orphan", "dataFieldName": "range", "value": "300"},
                 ],
@@ -240,14 +243,13 @@ class DatasetTests(unittest.TestCase):
 
         self.assertEqual(batch["vin"], "TESTVIN1234567890")
         self.assertEqual(batch["dataset"], "dataset.zip")
-        self.assertEqual(batch["event_count"], 3)
+        self.assertEqual(batch["event_count"], 2)
         values = [event["value"] for event in batch["events"]]
-        self.assertEqual(values, [77, 78, 300])
+        self.assertEqual(values, [77, 78])
         self.assertEqual(
             [event["car_captured_at"] for event in batch["events"]],
             [
                 "2026-01-02T03:04:05+00:00",
-                "2026-01-02T03:05:05+00:00",
                 "2026-01-02T03:05:05+00:00",
             ],
         )
@@ -256,7 +258,7 @@ class DatasetTests(unittest.TestCase):
         self.assertEqual(batch["events"][0]["structured_by_name_topic"], "structured/by_name/soc")
         self.assertEqual(batch["events"][0]["unit"], "%")
         self.assertTrue(all(event["field_name"] != "car_captured_time" for event in batch["events"]))
-        self.assertEqual(len({event["event_id"] for event in batch["events"]}), 3)
+        self.assertEqual(len({event["event_id"] for event in batch["events"]}), 2)
         self.assertEqual(dataset.by_field("battery_state_report.soc").value, 78)
 
     def test_history_batch_excludes_points_without_capture_time(self) -> None:
@@ -298,21 +300,21 @@ class DatasetTests(unittest.TestCase):
         self.assertEqual(structured["structured/by_key/captured_main/name"], "car_captured_time")
         self.assertEqual(
             structured["structured/by_name/car_captured_time/description"],
-            "Vehicle-side capture timestamp assigned to the surrounding datapoint group.",
+            "Vehicle-side report capture timestamp; flat payloads do not identify its associated measurement fields.",
         )
         self.assertEqual(structured[f"structured/by_key/{soc_key}/value"], 52)
         self.assertEqual(structured[f"structured/by_key/{soc_key}/unit"], "%")
-        self.assertEqual(structured[f"structured/by_key/{soc_key}/car_captured_at"], "2026-05-31T15:35:00+00:00")
+        self.assertEqual(structured[f"structured/by_key/{soc_key}/car_captured_at"], "")
         self.assertEqual(structured["structured/by_name/soc/value"], 52)
         self.assertEqual(structured["structured/by_name/soc/key"], soc_key)
         self.assertEqual(structured[f"structured/by_key/{soc_key}/name"], "soc")
         self.assertEqual(structured[f"structured/by_key/{soc_key}/json"]["description"], "Battery state of charge.")
         self.assertEqual(structured["structured/by_key/odometer/value"], 63151)
         self.assertEqual(structured["structured/by_key/odometer/unit"], "km")
-        self.assertEqual(structured["structured/by_key/odometer/car_captured_at"], "2026-05-31T15:36:00+00:00")
+        self.assertEqual(structured["structured/by_key/odometer/car_captured_at"], "")
         self.assertEqual(values["battery/soc"], 52)
-        self.assertEqual(curated_capture_values(dataset)["battery/soc/car_captured_at"], "2026-05-31T15:35:00+00:00")
-        self.assertEqual(curated_capture_values(dataset)["odometer/km/car_captured_at"], "2026-05-31T15:36:00+00:00")
+        self.assertEqual(curated_capture_values(dataset), {})
+        self.assertEqual(history_batch(dataset, "fixture.zip")["events"], [])
         self.assertFalse(any(topic.startswith("raw/") for topic in structured))
         self.assertFalse(any(value is None for value in structured.values()))
 

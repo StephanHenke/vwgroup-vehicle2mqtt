@@ -3,15 +3,34 @@
 from __future__ import annotations
 
 from datetime import datetime,timezone
-from typing import Any
+from typing import Any, Callable
+import math
 from .catalog import CURATED_TOPIC_FIELDS,DATA_CATALOG_BY_FIELD,DataCatalogEntry
 from .dataset import Dataset,DataPoint,topic_safe,_unique_topic_segments
+
+
+def soc_point(dataset: Dataset) -> DataPoint | None:
+    candidates = []
+    validity = dataset.by_field("battery_level_HV.state")
+    for field in ("battery_state_report.soc", "battery_level_HV.value"):
+        point = dataset.by_field(field)
+        if point is None:
+            continue
+        value = point.value
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not 0 <= value <= 100:
+            continue
+        if field == "battery_level_HV.value" and (validity is None or validity.value != "VALID"):
+            continue
+        candidates.append(point)
+    if len(candidates) == 2 and all(point.car_captured_at is not None for point in candidates):
+        return max(candidates, key=lambda point: point.car_captured_at)
+    return candidates[0] if candidates else None
 
 
 def curated_values(dataset: Dataset) -> dict[str, Any]:
     values: dict[str, Any] = {}
     for field_name, (topic, _unit) in CURATED_TOPIC_FIELDS.items():
-        point = dataset.by_field(field_name)
+        point = soc_point(dataset) if topic == "battery/soc" else dataset.by_field(field_name)
         if point is not None:
             values[topic] = point.value
     return values
@@ -20,7 +39,7 @@ def curated_values(dataset: Dataset) -> dict[str, Any]:
 def curated_capture_values(dataset: Dataset) -> dict[str, str]:
     values: dict[str, str] = {}
     for field_name, (topic, _unit) in CURATED_TOPIC_FIELDS.items():
-        point = dataset.by_field(field_name)
+        point = soc_point(dataset) if topic == "battery/soc" else dataset.by_field(field_name)
         if point is not None and point.car_captured_at is not None:
             values[f"{topic}/car_captured_at"] = point.car_captured_at.isoformat()
     return values
@@ -53,7 +72,7 @@ def datapoint_json(point: DataPoint) -> dict[str, Any]:
     }
 
 
-def structured_values(dataset: Dataset) -> dict[str, Any]:
+def structured_values(dataset: Dataset, *, point_order: Callable | None = None) -> dict[str, Any]:
     values: dict[str, Any] = {}
     points = list(dataset.points.values())
     key_topics = _unique_topic_segments([point.key for point in points])
@@ -87,7 +106,7 @@ def structured_values(dataset: Dataset) -> dict[str, Any]:
         by_name.setdefault(name_topic, []).append((point, metadata, key_topic))
 
     for name_topic, items in by_name.items():
-        sorted_items = sorted(items, key=lambda item: _datapoint_sort_key(item[0]), reverse=True)
+        sorted_items = sorted(items, key=lambda item: (point_order or _datapoint_sort_key)(item[0]), reverse=True)
         _latest_point, latest_metadata, _latest_key_topic = sorted_items[0]
         add_datapoint_tree(f"structured/by_name/{name_topic}", latest_metadata)
         values[f"structured/by_name/{name_topic}/keys"] = [

@@ -9,7 +9,8 @@ import logging
 import aiohttp
 from .api import EudaApiClient,ApiError,NO_CONTENT_SUFFIX
 from .config import ServiceConfig
-from .data import Dataset
+from .data import Dataset,parse_timestamp
+from .live_state import LiveState
 from .archive import save_original_dataset
 from .publishing import publish_dataset,publish_status
 from .state import _state_path,_load_state,_save_state,_state_car_captured_at
@@ -26,12 +27,9 @@ DATASET_LIST_RETRY_MAX_SECONDS = 30
 
 
 def _created_on(entry: dict) -> datetime | None:
-    raw = entry.get("createdOn")
-    if raw:
-        try:
-            return datetime.fromisoformat(raw.replace("Z", "+00:00"))
-        except ValueError:
-            pass
+    timestamp = parse_timestamp(entry.get("createdOn"))
+    if timestamp is not None:
+        return timestamp
     name = entry.get("name", "").rsplit(".", 1)[0]
     for part in reversed(name.split("_")):
         try:
@@ -139,6 +137,9 @@ async def poll_once(config: ServiceConfig, config_path: Path, dry_run: bool = Fa
     async with aiohttp.ClientSession(cookie_jar=aiohttp.CookieJar()) as session:
         client = EudaApiClient(session, config.portal)
         vin, identifier = await _select_vehicle_and_identifier(client, config, state)
+        if state.get("vin") and state["vin"] != vin:
+            state.clear()
+            state_car_captured_at = None
         try:
             listing = await _list_datasets_with_retries(client, vin, identifier)
         except ApiError as err:
@@ -158,7 +159,7 @@ async def poll_once(config: ServiceConfig, config_path: Path, dry_run: bool = Fa
             return config.retry_interval_seconds
         content = sorted(
             (entry for entry in listing if entry.get("name") and not entry["name"].endswith(NO_CONTENT_SUFFIX)),
-            key=lambda entry: _created_on(entry) or datetime.min.replace(tzinfo=timezone.utc),
+            key=lambda entry: (_created_on(entry) or datetime.min.replace(tzinfo=timezone.utc), entry["name"]),
         )
         if not content:
             message = "No content datasets available yet"
@@ -174,20 +175,35 @@ async def poll_once(config: ServiceConfig, config_path: Path, dry_run: bool = Fa
             )
             return _next_sleep(listing, config.poll_interval_seconds, config.retry_interval_seconds)
 
-        newest = content[-1]
-        name = newest["name"]
-        if not config.publish_unchanged and state.get("last_dataset") == name:
-            LOG.info("No new dataset: %s", name)
+        live = LiveState(state, vin, identifier)
+        pending = [entry for entry in content if entry["name"] not in live.processed]
+        if not pending and config.publish_unchanged:
+            pending = [content[-1]]
+        if not pending:
+            LOG.info("No new continuous datasets")
             publish_status(config, vin, connected=True, car_captured_at=state_car_captured_at, dry_run=dry_run)
             return _next_sleep(listing, config.poll_interval_seconds, config.retry_interval_seconds)
 
-        download = await client.async_download_dataset(vin, identifier, name)
-        if config.save_original_data and not dry_run:
-            save_original_dataset(config, config_path, download)
-        elif config.save_original_data:
-            LOG.info("Dry-run enabled; not saving original dataset ZIP %s", name)
-        dataset = Dataset.from_json(download.payload)
-        publish_dataset(config, vin, name, dataset, download.payload, download=download, state=state, dry_run=dry_run)
+        # Only publish the reconciled live state after all unread deliveries
+        # are collected. Raw/history retain their original package boundaries.
+        downloads = []
+        for index, entry in enumerate(pending):
+            if index:
+                await asyncio.sleep(2)
+            download = await client.async_download_dataset(vin, identifier, entry["name"])
+            if config.save_original_data and not dry_run:
+                save_original_dataset(config, config_path, download)
+            dataset = Dataset.from_json(download.payload)
+            live.merge(dataset, entry["name"], _created_on(entry))
+            downloads.append((download, dataset))
+        for index, (download, dataset) in enumerate(downloads):
+            publish_dataset(
+                config, vin, download.name, dataset, download.payload,
+                download=download, state=state, dry_run=dry_run,
+                live_state=live, publish_live=index == len(downloads) - 1,
+            )
+        live.save(state)
+        name = downloads[-1][0].name
 
         now = datetime.now(timezone.utc)
         state.update(

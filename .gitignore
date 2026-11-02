@@ -4,3 +4,4 @@ __pycache__/
 config.json
 data/
 access.txt
+AGENTS.md
