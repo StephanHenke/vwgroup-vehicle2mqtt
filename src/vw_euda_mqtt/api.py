@@ -31,6 +31,7 @@ from .api_identity import (
 )
 from .api_models import ApiError, AuthError, PortalConfig
 from .api_login import PortalLogin
+from .api_portal import normalize_portal_base_url
 
 LOG = logging.getLogger(__name__)
 
@@ -78,6 +79,7 @@ class EudaApiClient:
     def __init__(self, session: aiohttp.ClientSession, config: PortalConfig) -> None:
         self._session = session
         self._config = config
+        self._base_url = normalize_portal_base_url(config.base_url)
         self._logged_in = False
 
     async def _get(
@@ -114,7 +116,7 @@ class EudaApiClient:
             "response_type": "code",
             "scope": OIDC_SCOPE,
             "state": f"{self._config.country}__{self._config.language}__{state_brand}",
-            "redirect_uri": OIDC_REDIRECT_URI,
+            "redirect_uri": f"{self._base_url}/login",
             "prompt": "login",
         }
         return f"{OIDC_AUTHORIZE_URL}?{urlencode(params)}"
@@ -123,11 +125,11 @@ class EudaApiClient:
         brand = self._config.brand.upper()
         if brand in BRAND_CLIENT_IDS:
             return self._build_authorize_url()
-        redirect_url = f"{BASE_URL}/services/redirect/authentication?{urlencode({'brand': brand, 'method': 'login'})}"
+        redirect_url = f"{self._base_url}/services/redirect/authentication?{urlencode({'brand': brand, 'method': 'login'})}"
         try:
             async with await self._get(
                 redirect_url,
-                headers={"Referer": f"{BASE_URL}/{self._config.country}/{self._config.language}/login.html"},
+                headers={"Referer": f"{self._base_url}/{self._config.country}/{self._config.language}/login.html"},
             ) as resp:
                 parsed = urlparse(str(resp.url))
                 query = parse_qs(parsed.query)
@@ -171,7 +173,7 @@ class EudaApiClient:
 
     async def async_list_vehicles(self) -> list[dict]:
         await self.async_ensure_login()
-        payload = await self._get_json(f"{BASE_URL}{VEHICLES_PATH}?viewPosition=FRONT_LEFT")
+        payload = await self._get_json(f"{self._base_url}{VEHICLES_PATH}?viewPosition=FRONT_LEFT")
         vehicles = _extract_vins(payload)
         for vehicle in vehicles:
             try:
@@ -187,17 +189,17 @@ class EudaApiClient:
         await self.async_ensure_login()
         headers = {"traceid": f"vehicle-relation-fetch-{uuid.uuid4()}"}
         return await self._get_json(
-            f"{BASE_URL}{RELATION_PATH.format(vin=vin)}",
+            f"{self._base_url}{RELATION_PATH.format(vin=vin)}",
             headers=headers,
         )
 
     async def async_get_metadata(self, vin: str) -> dict:
         await self.async_ensure_login()
-        return await self._get_json(f"{BASE_URL}{METADATA_PATH.format(vin=vin)}")
+        return await self._get_json(f"{self._base_url}{METADATA_PATH.format(vin=vin)}")
 
     async def async_list_datasets(self, vin: str, identifier: str) -> list[dict]:
         await self.async_ensure_login()
-        url = f"{BASE_URL}{LIST_PATH.format(vin=vin, identifier=identifier)}"
+        url = f"{self._base_url}{LIST_PATH.format(vin=vin, identifier=identifier)}"
         data = await self._get_json(url, headers={"type": "partial"})
         return data if isinstance(data, list) else data.get("files", [])
 
@@ -205,7 +207,7 @@ class EudaApiClient:
         await self.async_ensure_login()
         if name.endswith(NO_CONTENT_SUFFIX):
             raise ApiError(f"{name} contains no content")
-        url = f"{BASE_URL}{DOWNLOAD_PATH.format(vin=vin, identifier=identifier)}"
+        url = f"{self._base_url}{DOWNLOAD_PATH.format(vin=vin, identifier=identifier)}"
         headers = {"filename": name, "type": "partial"}
         try:
             async with await self._get(url, headers=headers) as resp:

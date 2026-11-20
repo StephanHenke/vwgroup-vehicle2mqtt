@@ -7,6 +7,8 @@ from pathlib import Path
 import json
 import os
 from .api import PortalConfig
+from .api_constants import BASE_URL
+from .api_portal import normalize_portal_base_url
 
 
 @dataclass(frozen=True)
@@ -44,6 +46,7 @@ class ServiceConfig:
     save_original_data: bool = False
     original_data_dir: str = "data/original"
     mqtt: MqttConfig | None = None
+    portal_base_url: str = BASE_URL
 
     @classmethod
     def from_file(cls, path: Path) -> "ServiceConfig":
@@ -87,6 +90,9 @@ class ServiceConfig:
             save_original_data=bool(raw.get("save_original_data", False)),
             original_data_dir=raw.get("original_data_dir") or "data/original",
             mqtt=mqtt_config,
+            portal_base_url=normalize_portal_base_url(
+                _env_value("VW_EUDA_PORTAL_BASE_URL") or raw.get("portal_base_url") or BASE_URL
+            ),
         )
 
     @property
@@ -97,6 +103,7 @@ class ServiceConfig:
             brand=self.brand,
             country=self.country,
             language=self.language,
+            base_url=self.portal_base_url,
         )
 
 

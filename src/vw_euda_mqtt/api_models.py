@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .api_constants import BASE_URL
+
 class ApiError(Exception):
     """Generic API failure."""
 
@@ -19,6 +21,7 @@ class PortalConfig:
     brand: str = "AUDI"
     country: str = "de"
     language: str = "de"
+    base_url: str = BASE_URL
 
     @property
     def oidc_state(self) -> str:

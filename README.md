@@ -15,7 +15,7 @@ The former project name was `vw-euda-mqtt`. The new name
 `vwgroup-vehicle2mqtt` describes the scope more broadly: Volkswagen Group
 vehicle data forwarded to MQTT.
 
-The service logs in to `eu-data-act.drivesomethinggreater.com` using the
+The service logs in to `eu-data-act.vwgroup-datahub.com` using the
 brand-specific Identity client, downloads the latest continuous-data ZIP
 for a VIN, extracts useful data points, and publishes them to MQTT. MQTT retain
 is disabled by default and must be enabled explicitly with `mqtt.retain=true`.
@@ -54,7 +54,7 @@ polls.
 
 ## Portal Setup
 
-1. Open <https://eu-data-act.drivesomethinggreater.com/> in a browser.
+1. Open <https://eu-data-act.vwgroup-datahub.com/> in a browser.
 2. Select the correct brand, for example `Audi`.
 3. Log in with the same myAudi/VW account used in `config.json`.
 4. Complete any terms, registration, country/language, or consent prompts.
@@ -88,6 +88,15 @@ issue a nonempty `access_token` cookie usable for the portal API. A direct
 vehicle API request must then return HTTP 200 with valid vehicle API JSON;
 redirects or error responses fail the session check without another login.
 
+The portal moved from `eu-data-act.drivesomethinggreater.com` to
+`eu-data-act.vwgroup-datahub.com`. The known legacy redirect remains allowed;
+callbacks, cookies and API requests use the configured portal origin. Unknown
+hosts are not trusted automatically. A blocked redirect reports only its
+hostname, never authentication parameters. For a verified future migration,
+set `portal_base_url` or `VW_EUDA_PORTAL_BASE_URL` to the official HTTPS origin.
+Do not disable redirect validation or use wildcard host permissions. Passwords
+are still submitted only to `identity.vwgroup.io`.
+
 The localized `user.html` CMS page is never fetched. Its status code,
 maintenance state, or availability cannot invalidate the verified session.
 This follows the [VW-contributed evcc login update](https://github.com/evcc-io/evcc/commit/fb838188e97657820a8de98c2a2bc8ac6a9b1e85).
@@ -116,6 +125,10 @@ Important fields:
 - `email` / `password`: myAudi/VW account credentials.
 - `brand`: use `AUDI` for Audi vehicles.
 - `country` / `language`: locale used by the portal, for example `de`.
+- `portal_base_url`: optional HTTPS origin, default
+  `https://eu-data-act.vwgroup-datahub.com`. Override only after independently
+  verifying an official portal migration; credentials, paths, query strings,
+  fragments and nonstandard ports are rejected.
 - `vin`: vehicle VIN. If empty, the service tries to auto-select a single
   vehicle.
 - `identifier`: can stay empty. The service reads the continuous-data
@@ -157,6 +170,7 @@ VW_EUDA_EMAIL
 VW_EUDA_PASSWORD
 VW_EUDA_VIN
 VW_EUDA_IDENTIFIER
+VW_EUDA_PORTAL_BASE_URL
 VW_EUDA_MQTT_HOST
 VW_EUDA_MQTT_USERNAME
 VW_EUDA_MQTT_PASSWORD

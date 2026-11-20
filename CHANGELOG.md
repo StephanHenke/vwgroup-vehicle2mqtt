@@ -7,6 +7,25 @@ semantic versioning.
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-11-20
+
+### Fixed
+
+- Restore login after the EU Data Act portal moved to
+  `eu-data-act.vwgroup-datahub.com`. Use the configured portal origin consistently
+  for OAuth redirects, callback cookies, session verification and vehicle APIs;
+  preserve the known legacy redirect without trusting arbitrary domains (#10).
+- Report blocked login destinations by hostname without exposing authentication
+  parameters. Continue rejecting HTTP, userinfo, nonstandard ports and
+  credential POSTs outside the Identity host.
+
+### Added
+
+- Optional `portal_base_url` setting and `VW_EUDA_PORTAL_BASE_URL` override for
+  independently verified future HTTPS portal migrations without rebuilding the
+  image. Existing configurations use the current portal by default; MQTT topics,
+  datapoint keys, Home Assistant IDs and retain defaults remain unchanged.
+
 ## [0.3.2] - 2026-11-02
 
 ### Fixed

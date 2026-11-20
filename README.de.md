@@ -16,7 +16,7 @@ Der frühere Projektname war `vw-euda-mqtt`. Der neue Name
 `vwgroup-vehicle2mqtt` beschreibt den Einsatzzweck breiter, weil es um
 Fahrzeugdaten aus dem Volkswagen Konzern und deren Weiterleitung nach MQTT geht.
 
-Der Dienst meldet sich bei `eu-data-act.drivesomethinggreater.com` an, wählt die
+Der Dienst meldet sich bei `eu-data-act.vwgroup-datahub.com` an, wählt die
 konfigurierte Marke aus, liest die neueste Continuous-Data-ZIP-Datei für eine
 FIN/VIN, extrahiert nützliche Fahrzeugwerte und publiziert sie nach MQTT. MQTT
 Retain ist standardmäßig deaktiviert und muss mit `mqtt.retain=true` bewusst
@@ -58,7 +58,7 @@ zusätzlich einen `PendingData`-Status.
 
 ## Voraussetzungen im Portal
 
-1. Einmal im Browser auf <https://eu-data-act.drivesomethinggreater.com/>
+1. Einmal im Browser auf <https://eu-data-act.vwgroup-datahub.com/>
    anmelden.
 2. Die passende Marke auswählen, bei diesem Projekt typischerweise `Audi`.
 3. Dasselbe myAudi/VW-Konto verwenden, das auch in `config.json` steht.
@@ -95,6 +95,17 @@ Danach muss eine direkte Fahrzeug-API-Anfrage HTTP 200 mit gültigem
 Fahrzeug-API-JSON liefern. Weiterleitungen und Fehler lassen diese
 Sitzungsprüfung ohne erneuten Login scheitern.
 
+Das Portal ist von `eu-data-act.drivesomethinggreater.com` nach
+`eu-data-act.vwgroup-datahub.com` umgezogen. Die bekannte alte Weiterleitung
+bleibt erlaubt; Callback, Cookies und API-Anfragen nutzen die konfigurierte
+Portaladresse. Unbekannten Hosts wird nicht automatisch vertraut. Bei einer
+blockierten Weiterleitung nennt die Fehlermeldung nur den Hostnamen, keine
+Anmeldeparameter. Fuer einen zukuenftigen, offiziell bestaetigten Umzug kann
+`portal_base_url` oder `VW_EUDA_PORTAL_BASE_URL` auf den offiziellen
+HTTPS-Ursprung gesetzt werden. Die Weiterleitungspruefung nicht deaktivieren
+und keine Wildcard-Freigaben verwenden. Passwoerter werden weiterhin nur an
+`identity.vwgroup.io` gesendet.
+
 Die lokalisierte CMS-Seite `user.html` wird nicht abgerufen. Ihr Statuscode,
 Wartungszustand oder ihre Verfügbarkeit haben keinen Einfluss auf die
 bestätigte Sitzung. Grundlage ist die
@@ -125,6 +136,10 @@ Wichtige Felder:
 - `email` / `password`: myAudi/VW-Konto.
 - `brand`: für Audi auf `AUDI` setzen.
 - `country` / `language`: für Deutschland typischerweise `de`.
+- `portal_base_url`: optionaler HTTPS-Ursprung, Standard
+  `https://eu-data-act.vwgroup-datahub.com`. Nur nach unabhaengiger Pruefung
+  eines offiziellen Portalumzugs ueberschreiben; Zugangsdaten, Pfade,
+  Query-Parameter, Fragmente und abweichende Ports sind nicht erlaubt.
 - `vin`: FIN/VIN des Fahrzeugs. Wenn leer, versucht der Dienst ein einzelnes
   Fahrzeug automatisch zu finden.
 - `identifier`: kann leer bleiben. Der Dienst liest den Continuous-Data-
@@ -167,6 +182,7 @@ VW_EUDA_EMAIL
 VW_EUDA_PASSWORD
 VW_EUDA_VIN
 VW_EUDA_IDENTIFIER
+VW_EUDA_PORTAL_BASE_URL
 VW_EUDA_MQTT_HOST
 VW_EUDA_MQTT_USERNAME
 VW_EUDA_MQTT_PASSWORD

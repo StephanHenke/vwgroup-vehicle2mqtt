@@ -1,7 +1,9 @@
 """Synthetic login transport and API regressions; no real account data."""
 
 import json
+import io
 import unittest
+import zipfile
 from http.cookies import SimpleCookie
 from urllib.parse import parse_qs, urlencode, urlparse
 
@@ -10,6 +12,7 @@ from yarl import URL
 
 from vw_euda_mqtt.api import EudaApiClient, BASE_URL, IDENTITY_BASE, USER_AGENT, VEHICLES_PATH
 from vw_euda_mqtt.api_login import MAX_REDIRECTS
+from vw_euda_mqtt.api_constants import LEGACY_BASE_URL
 from vw_euda_mqtt.api import ApiError, AuthError, PortalConfig
 
 
@@ -27,7 +30,7 @@ def form(action):
 
 
 class Response:
-    def __init__(self, url, status=200, html="", *, location=None, cookie=None, payload=None):
+    def __init__(self, url, status=200, html="", *, location=None, cookie=None, payload=None, raw=b""):
         self.url = URL(url)
         self.status = status
         self.html = html
@@ -37,6 +40,7 @@ class Response:
             self.cookies.load(cookie)
         self.released = False
         self.payload = [] if payload is None else payload
+        self.raw = raw
 
     async def __aenter__(self):
         return self
@@ -54,20 +58,24 @@ class Response:
             raise self.payload
         return self.payload
 
+    async def read(self):
+        return self.raw
+
 
 class Session:
-    def __init__(self, responses):
+    def __init__(self, responses, *, portal_base_url=BASE_URL):
         self.responses = list(responses)
         self.cookie_jar = aiohttp.CookieJar()
         self.calls = []
         self.cms_status = 406
-        self.session_check = Response(SESSION_CHECK)
+        self.session_check_url = f"{portal_base_url}{VEHICLES_PATH}?viewPosition=FRONT_LEFT"
+        self.session_check = Response(self.session_check_url)
 
     def _request(self, method, url, **kwargs):
         self.calls.append((method, str(url), kwargs))
         if str(url) == USER_PAGE:
             return Response(USER_PAGE, self.cms_status)
-        if str(url) == SESSION_CHECK:
+        if str(url) == self.session_check_url:
             return self.session_check
         if not self.responses:
             raise AssertionError(f"Unexpected request to {urlparse(str(url)).path}")
@@ -116,8 +124,9 @@ class LoginTests(unittest.IsolatedAsyncioTestCase):
             Response(IDENTIFIER, html=form("/authenticate")),
             *tail,
         ]
-        session = Session(responses)
-        client = EudaApiClient(session, config or PortalConfig("user@example.com", "test-password"))
+        config = config or PortalConfig("user@example.com", "test-password")
+        session = Session(responses, portal_base_url=config.base_url)
+        client = EudaApiClient(session, config)
         return client, session, responses
 
     async def test_callback_cookie_completes_login_without_fetching_cms_or_priming(self):
@@ -218,6 +227,89 @@ class LoginTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(AuthError, "form data outside"):
                 await client.async_login()
             self.assertEqual(len(session.calls), 4)
+
+    async def test_known_legacy_portal_redirect_reaches_current_callback_and_api(self):
+        legacy_login = f"{LEGACY_BASE_URL}/login?code=example&state=de__de__AUDI"
+        current_login = f"{BASE_URL}/login?code=example&state=de__de__AUDI"
+        for status in (301, 302, 303, 307, 308):
+            with self.subTest(status=status):
+                client, session, _ = self.client(
+                    Response(PASSWORD, 302, location=legacy_login),
+                    Response(legacy_login, status, location=current_login),
+                    Response(current_login, 302, location=CALLBACK), callback(),
+                )
+                await client.async_login()
+                self.assertTrue(client._logged_in)
+                self.assertEqual(session.calls[-1][1], SESSION_CHECK)
+                self.assertTrue(all(method == "GET" for method, url, _ in session.calls if url.startswith(LEGACY_BASE_URL)))
+
+    async def test_legacy_cookie_cannot_authenticate_current_portal(self):
+        client, session, _ = self.client(
+            Response(PASSWORD, 302, location=CALLBACK),
+            callback(cookie="access_token=test-token; Domain=drivesomethinggreater.com; Path=/; Secure"),
+        )
+        session.cookie_jar.update_cookies({"access_token": "old-token"}, response_url=URL(LEGACY_BASE_URL))
+        with self.assertRaisesRegex(AuthError, "cookie missing"):
+            await client.async_login()
+        self.assertFalse(client._logged_in)
+
+    async def test_unknown_future_redirect_is_actionable_and_redacted(self):
+        target = "https://next-portal.example/login?code=secret-code&state=private-state#private-fragment"
+        client, session, _ = self.client(Response(PASSWORD, 302, location=target))
+        with self.assertRaises(AuthError) as caught:
+            await client.async_login()
+        message = str(caught.exception)
+        self.assertIn("next-portal.example", message)
+        self.assertIn("VW_EUDA_PORTAL_BASE_URL", message)
+        for secret in ("secret-code", "private-state", "private-fragment", "test-password"):
+            self.assertNotIn(secret, message)
+        self.assertEqual(len(session.calls), 4)
+
+    async def test_configured_portal_is_used_for_oauth_cookie_check_and_every_api_url(self):
+        from vw_euda_mqtt.api_constants import METADATA_PATH, RELATION_PATH, LIST_PATH, DOWNLOAD_PATH
+        base = "https://next-portal.example"
+        config = PortalConfig("user@example.com", "test-password", base_url=base)
+        custom_callback = base + "/services/callbacklogin"
+        client, session, _ = self.client(
+            Response(PASSWORD, 302, location=custom_callback),
+            Response(custom_callback, 302, cookie="access_token=test-token; Path=/; Secure"), config=config,
+        )
+        await client.async_login()
+        authorize_query = parse_qs(urlparse(session.calls[0][1]).query)
+        self.assertEqual(authorize_query["redirect_uri"], [base + "/login"])
+        self.assertEqual(session.calls[-1][1], base + VEHICLES_PATH + "?viewPosition=FRONT_LEFT")
+        vin, identifier = "TESTVIN1234567890", "test-stream"
+        metadata = base + METADATA_PATH.format(vin=vin)
+        relation = base + RELATION_PATH.format(vin=vin)
+        listing = base + LIST_PATH.format(vin=vin, identifier=identifier)
+        download = base + DOWNLOAD_PATH.format(vin=vin, identifier=identifier)
+        raw = io.BytesIO()
+        with zipfile.ZipFile(raw, "w") as archive:
+            archive.writestr("sample.json", '{"Data": []}')
+        session.responses.extend([
+            Response(metadata, html='{"Identifier":"test-stream"}'),
+            Response(relation, html='{}'),
+            Response(listing, html='[{"name":"sample.zip"}]'),
+            Response(download, raw=raw.getvalue()),
+        ])
+        self.assertEqual((await client.async_get_metadata(vin))["Identifier"], identifier)
+        self.assertEqual(await client.async_get_relation(vin), {})
+        self.assertEqual(await client.async_list_datasets(vin, identifier), [{"name": "sample.zip"}])
+        self.assertEqual((await client.async_download_dataset(vin, identifier, "sample.zip")).payload, {"Data": []})
+        self.assertEqual([url for _, url, _ in session.calls[-4:]], [metadata, relation, listing, download])
+        self.assertFalse(any(url.startswith(LEGACY_BASE_URL) for _, url, _ in session.calls))
+
+    async def test_configured_portal_cannot_receive_post_preserved_password(self):
+        base = "https://next-portal.example"
+        for status in (307, 308):
+            with self.subTest(status=status):
+                client, session, _ = self.client(
+                    Response(PASSWORD, status, location=base + "/services/callbacklogin"),
+                    config=PortalConfig("user@example.com", "test-password", base_url=base),
+                )
+                with self.assertRaisesRegex(AuthError, "form data outside"):
+                    await client.async_login()
+                self.assertEqual(len(session.calls), 4)
 
     async def test_marketing_callback_skips_page_and_reencodes_query(self):
         resume = f"{IDENTITY_BASE}/oidc/v1/oauth/client/callback/success?scopes=openid+cars"

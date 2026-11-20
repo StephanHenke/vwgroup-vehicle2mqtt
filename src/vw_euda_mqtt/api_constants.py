@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from . import __version__
 
-BASE_URL = "https://eu-data-act.drivesomethinggreater.com"
+BASE_URL = "https://eu-data-act.vwgroup-datahub.com"
+LEGACY_BASE_URL = "https://eu-data-act.drivesomethinggreater.com"
 IDENTITY_BASE = "https://identity.vwgroup.io"
 OIDC_AUTHORIZE_URL = IDENTITY_BASE + "/oidc/v1/authorize"
 OIDC_CLIENT_ID = "9b58543e-1c15-4193-91d5-8a14145bebb0@apps_vw-dilab_com"

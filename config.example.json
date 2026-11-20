@@ -4,6 +4,7 @@
   "brand": "AUDI",
   "country": "de",
   "language": "de",
+  "portal_base_url": "https://eu-data-act.vwgroup-datahub.com",
   "vin": "",
   "identifier": "",
   "poll_interval_seconds": 900,
